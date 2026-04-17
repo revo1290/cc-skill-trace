@@ -4,12 +4,12 @@ import chalk from "chalk";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readEvents, clearEvents, appendEvent } from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
 import { renderDashboard, renderCompact } from "./format.js";
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 program
     .name("cc-skill-trace")
     .description("Skill invocation debugger & visualizer for Claude Code")
@@ -176,7 +176,7 @@ program
     if (opts.open !== false) {
         const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
         try {
-            execSync(`${cmd} "${opts.output}"`, { stdio: "ignore" });
+            execFileSync(cmd, [opts.output], { stdio: "ignore" });
         }
         catch {
             console.log(chalk.gray(`  Open: ${opts.output}`));

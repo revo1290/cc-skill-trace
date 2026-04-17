@@ -1,3 +1,17 @@
+/** Escape HTML special chars (server-side, TypeScript) */
+function escapeHtml(s) {
+    return s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+/** Safely embed a value as JSON inside a <script> tag.
+ *  Escapes "</" to prevent early </script> termination. */
+function safeJson(value) {
+    return JSON.stringify(value).replace(/<\//g, "<\\/");
+}
 /** Build a standalone HTML file that visualizes skill invocations */
 export function buildHtmlReport(events) {
     // ── Aggregation ──────────────────────────────────────────────────────────
@@ -25,9 +39,9 @@ export function buildHtmlReport(events) {
         (byDay[day] ??= []).push(ev);
     }
     // ── JSON data embedded in the page ───────────────────────────────────────
-    const eventsJson = JSON.stringify(events);
-    const topSkillsJson = JSON.stringify(topSkills);
-    const byDayJson = JSON.stringify(Object.entries(byDay).map(([day, evs]) => ({ day, count: evs.length })));
+    const eventsJson = safeJson(events);
+    const topSkillsJson = safeJson(topSkills);
+    const byDayJson = safeJson(Object.entries(byDay).map(([day, evs]) => ({ day, count: evs.length })));
     return /* html */ `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -83,7 +97,7 @@ export function buildHtmlReport(events) {
   <span>🔍</span>
   <h1>cc-skill-trace</h1>
   <span class="badge">Skill Invocation Report</span>
-  <span style="margin-left:auto;color:var(--muted);font-size:12px">Generated: ${new Date().toLocaleString("ja-JP")}</span>
+  <span style="margin-left:auto;color:var(--muted);font-size:12px">Generated: ${escapeHtml(new Date().toLocaleString("ja-JP"))}</span>
 </div>
 
 <div class="stats">
@@ -136,6 +150,16 @@ const EVENTS = ${eventsJson};
 const TOP_SKILLS = ${topSkillsJson};
 const BY_DAY = ${byDayJson};
 
+// ── HTML escaping (client-side) ───────────────────────────────────────────
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ── Charts ────────────────────────────────────────────────────────────────
 const skillCtx = document.getElementById('skillChart').getContext('2d');
 new Chart(skillCtx, {
@@ -163,6 +187,7 @@ new Chart(tlCtx, {
 // ── Event list ────────────────────────────────────────────────────────────
 let currentFilter = 'all';
 let currentSearch = '';
+let renderedEvents = [];
 
 function renderList() {
   const filtered = EVENTS.filter(ev => {
@@ -175,18 +200,21 @@ function renderList() {
     return true;
   }).reverse(); // newest first
 
+  renderedEvents = filtered;
   document.getElementById('countLabel').textContent = '(' + filtered.length + ' events)';
   const list = document.getElementById('eventList');
   list.innerHTML = filtered.map((ev, i) => {
     const time = new Date(ev.timestamp).toLocaleString('ja-JP');
-    const srcCls = ev.source === 'claude' ? 'source-claude' : 'source-user';
-    const srcLabel = ev.source === 'claude' ? '🤖 claude' : '👤 user';
-    const trigger = (ev.triggerMessage || '').replace(/"/g, '&quot;').slice(0, 100);
-    const session = (ev.sessionId || '').slice(0, 12);
+    const srcCls = ev.source === 'user' ? 'source-user' : 'source-claude';
+    const srcLabel = ev.source === 'user' ? '👤 user' : '🤖 claude';
+    const skillDisplay = escapeHtml(ev.skillName) + (ev.skillArgs
+      ? \` <span style="color:#8b949e;font-weight:400">\${escapeHtml(ev.skillArgs.slice(0, 30))}</span>\`
+      : '');
+    const trigger = escapeHtml((ev.triggerMessage || '').slice(0, 100));
     return \`
-      <div class="event-card" onclick="toggleDetail(this, \${JSON.stringify(JSON.stringify(ev)).slice(1,-1)})">
-        <div class="time">\${time}</div>
-        <div class="skill">\${ev.skillName}\${ev.skillArgs ? ' <span style="color:#8b949e;font-weight:400">' + ev.skillArgs.slice(0,30) + '</span>' : ''}</div>
+      <div class="event-card" onclick="toggleDetail(this, \${i})">
+        <div class="time">\${escapeHtml(time)}</div>
+        <div class="skill">\${skillDisplay}</div>
         <div><span class="source-badge \${srcCls}">\${srcLabel}</span></div>
         <div class="trigger">\${trigger ? '"' + trigger + '"' : '<span style="color:#30363d">—</span>'}</div>
         <div class="detail-panel" id="detail-\${i}"></div>
@@ -194,18 +222,27 @@ function renderList() {
   }).join('');
 }
 
-function toggleDetail(card, evJson) {
-  const ev = JSON.parse(evJson);
+function toggleDetail(card, idx) {
+  const ev = renderedEvents[idx];
   const panels = card.querySelectorAll('.detail-panel');
   const panel = panels[panels.length - 1];
   if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+  const gitBranchHtml = ev.gitBranch
+    ? \`<div class="label">GIT BRANCH</div><div class="content" style="margin-bottom:12px">\${escapeHtml(ev.gitBranch)}</div>\`
+    : '';
+  const tokensHtml = (ev.injectedTokens != null)
+    ? \`<div class="label">INJECTED TOKENS</div><div class="content">+\${Number(ev.injectedTokens).toLocaleString()} tokens</div>\`
+    : '';
+  const triggerHtml = ev.triggerMessage
+    ? escapeHtml(ev.triggerMessage)
+    : '（取得できませんでした。cc-skill-trace scan を実行してください）';
   panel.innerHTML = \`
     <div class="label">SESSION ID</div>
-    <div class="content" style="margin-bottom:12px">\${ev.sessionId || '—'}</div>
+    <div class="content" style="margin-bottom:12px">\${escapeHtml(ev.sessionId || '—')}</div>
     <div class="label">TRIGGER MESSAGE (直前のユーザー発言)</div>
-    <div class="content" style="margin-bottom:12px;color:#e6edf3">\${ev.triggerMessage || '（取得できませんでした。cc-skill-trace scan を実行してください）'}</div>
-    \${ev.gitBranch ? '<div class="label">GIT BRANCH</div><div class="content" style="margin-bottom:12px">' + ev.gitBranch + '</div>' : ''}
-    \${ev.injectedTokens ? '<div class="label">INJECTED TOKENS</div><div class="content">+' + ev.injectedTokens.toLocaleString() + ' tokens</div>' : ''}
+    <div class="content" style="margin-bottom:12px;color:#e6edf3">\${triggerHtml}</div>
+    \${gitBranchHtml}
+    \${tokensHtml}
   \`;
   panel.style.display = 'block';
 }
