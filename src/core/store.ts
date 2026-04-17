@@ -21,7 +21,10 @@ export async function readEvents(): Promise<SkillInvocationEvent[]> {
     return raw
       .split("\n")
       .filter((l) => l.trim())
-      .map((l) => JSON.parse(l) as SkillInvocationEvent);
+      .flatMap((l): SkillInvocationEvent[] => {
+        try { return [JSON.parse(l) as SkillInvocationEvent]; }
+        catch { return []; }
+      });
   } catch {
     return [];
   }

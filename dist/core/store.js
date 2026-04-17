@@ -16,7 +16,14 @@ export async function readEvents() {
         return raw
             .split("\n")
             .filter((l) => l.trim())
-            .map((l) => JSON.parse(l));
+            .flatMap((l) => {
+            try {
+                return [JSON.parse(l)];
+            }
+            catch {
+                return [];
+            }
+        });
     }
     catch {
         return [];

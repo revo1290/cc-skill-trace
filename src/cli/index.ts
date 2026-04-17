@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { program } from "commander";
 import chalk from "chalk";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, rename } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { execSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readEvents, clearEvents, appendEvent, STORE_DIR } from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
@@ -46,7 +46,9 @@ program
     });
     settings.hooks = { ...hooks, PreToolUse: preToolUse };
 
-    await writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+    const tmpPath = settingsPath + ".tmp";
+    await writeFile(tmpPath, JSON.stringify(settings, null, 2), "utf-8");
+    await rename(tmpPath, settingsPath);
     console.log(chalk.green("✓  Hook installed → " + settingsPath));
     console.log(chalk.gray("  Restart Claude Code for the hook to take effect."));
 
@@ -167,9 +169,17 @@ program
     console.log(chalk.green(`✓  Report → ${opts.output}`));
 
     if (opts.open !== false) {
-      const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-      try { execSync(`${cmd} "${opts.output}"`, { stdio: "ignore" }); }
-      catch { console.log(chalk.gray(`  Open: ${opts.output}`)); }
+      // Use spawn (not execSync) so the path is passed as a literal arg — no shell injection surface.
+      // Windows: "start" is a cmd.exe builtin, must be invoked via cmd /c.
+      const args = process.platform === "win32"
+        ? ["cmd", ["/c", "start", "", opts.output]]
+        : process.platform === "darwin"
+          ? ["open", [opts.output]]
+          : ["xdg-open", [opts.output]];
+      try {
+        const child = spawn(args[0] as string, args[1] as string[], { stdio: "ignore", detached: true });
+        child.unref();
+      } catch { console.log(chalk.gray(`  Open: ${opts.output}`)); }
     }
   });
 

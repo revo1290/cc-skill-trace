@@ -34,7 +34,7 @@ export function buildHtmlReport(events) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>cc-skill-trace — Skill Invocation Report</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js" integrity="sha384-rRoXxn2yHlrZYB587Ki9RO1tONhLdM6XfORg7Rw4uwH4/Fh/5nP7IUX91bkaKUgs" crossorigin="anonymous"></script>
 <style>
   :root {
     --bg: #0d1117; --surface: #161b22; --border: #30363d;
@@ -136,6 +136,10 @@ const EVENTS = ${eventsJson};
 const TOP_SKILLS = ${topSkillsJson};
 const BY_DAY = ${byDayJson};
 
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
 // ── Charts ────────────────────────────────────────────────────────────────
 const skillCtx = document.getElementById('skillChart').getContext('2d');
 new Chart(skillCtx, {
@@ -181,12 +185,12 @@ function renderList() {
     const time = new Date(ev.timestamp).toLocaleString('ja-JP');
     const srcCls = ev.source === 'claude' ? 'source-claude' : 'source-user';
     const srcLabel = ev.source === 'claude' ? '🤖 claude' : '👤 user';
-    const trigger = (ev.triggerMessage || '').replace(/"/g, '&quot;').slice(0, 100);
+    const trigger = escapeHtml((ev.triggerMessage || '').slice(0, 100));
     const session = (ev.sessionId || '').slice(0, 12);
     return \`
       <div class="event-card" onclick="toggleDetail(this, \${JSON.stringify(JSON.stringify(ev)).slice(1,-1)})">
         <div class="time">\${time}</div>
-        <div class="skill">\${ev.skillName}\${ev.skillArgs ? ' <span style="color:#8b949e;font-weight:400">' + ev.skillArgs.slice(0,30) + '</span>' : ''}</div>
+        <div class="skill">\${escapeHtml(ev.skillName)}\${ev.skillArgs ? ' <span style="color:#8b949e;font-weight:400">' + escapeHtml(ev.skillArgs.slice(0,30)) + '</span>' : ''}</div>
         <div><span class="source-badge \${srcCls}">\${srcLabel}</span></div>
         <div class="trigger">\${trigger ? '"' + trigger + '"' : '<span style="color:#30363d">—</span>'}</div>
         <div class="detail-panel" id="detail-\${i}"></div>
@@ -201,10 +205,10 @@ function toggleDetail(card, evJson) {
   if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
   panel.innerHTML = \`
     <div class="label">SESSION ID</div>
-    <div class="content" style="margin-bottom:12px">\${ev.sessionId || '—'}</div>
+    <div class="content" style="margin-bottom:12px">\${escapeHtml(ev.sessionId || '—')}</div>
     <div class="label">TRIGGER MESSAGE (直前のユーザー発言)</div>
-    <div class="content" style="margin-bottom:12px;color:#e6edf3">\${ev.triggerMessage || '（取得できませんでした。cc-skill-trace scan を実行してください）'}</div>
-    \${ev.gitBranch ? '<div class="label">GIT BRANCH</div><div class="content" style="margin-bottom:12px">' + ev.gitBranch + '</div>' : ''}
+    <div class="content" style="margin-bottom:12px;color:#e6edf3">\${escapeHtml(ev.triggerMessage || '（取得できませんでした。cc-skill-trace scan を実行してください）')}</div>
+    \${ev.gitBranch ? '<div class="label">GIT BRANCH</div><div class="content" style="margin-bottom:12px">' + escapeHtml(ev.gitBranch) + '</div>' : ''}
     \${ev.injectedTokens ? '<div class="label">INJECTED TOKENS</div><div class="content">+' + ev.injectedTokens.toLocaleString() + ' tokens</div>' : ''}
   \`;
   panel.style.display = 'block';
