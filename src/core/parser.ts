@@ -1,10 +1,9 @@
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { createInterface } from "node:readline";
 import type { SessionLogEntry, SkillInvocationEvent, ToolUse, ContentBlock } from "./types.js";
-import { randomUUID } from "node:crypto";
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
 
@@ -110,9 +109,11 @@ export async function extractInvocationsFromFile(
         triggerMessage?.trimStart().startsWith(`/${skillName}`) ?? false;
 
       events.push({
-        id: randomUUID(),
+        // Use the tool_use block ID as event ID — it is globally unique per invocation
+        // and stable across repeated scans of the same session file.
+        id: call.id,
         timestamp: entry.timestamp,
-        sessionId: entry.sessionId ?? filePath.split("/").pop()?.replace(".jsonl", "") ?? "unknown",
+        sessionId: entry.sessionId ?? basename(filePath, ".jsonl"),
         skillName,
         skillArgs,
         source: isUserInvoked ? "user" : "claude",

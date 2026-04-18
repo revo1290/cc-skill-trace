@@ -5,11 +5,13 @@ import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { readEvents, clearEvents, appendEvent } from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
 import { renderDashboard, renderCompact } from "./format.js";
-const VERSION = "0.1.1";
+const _require = createRequire(import.meta.url);
+const VERSION = _require("../../package.json").version;
 program
     .name("cc-skill-trace")
     .description("Skill invocation debugger & visualizer for Claude Code")
@@ -70,7 +72,11 @@ program
         raw += chunk;
     let payload;
     try {
-        payload = JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") {
+            process.exit(0);
+        }
+        payload = parsed;
     }
     catch {
         process.exit(0);
@@ -110,9 +116,15 @@ program
     if (opts.scan) {
         process.stderr.write(chalk.gray("  Scanning ~/.claude/projects/ …\n"));
         const scanned = await extractAllInvocations({ since: opts.since });
-        for (const ev of scanned)
-            await appendEvent(ev);
-        process.stderr.write(chalk.gray(`  Imported ${scanned.length} invocations.\n\n`));
+        const existingIds = new Set((await readEvents()).map((e) => e.id));
+        let imported = 0;
+        for (const ev of scanned) {
+            if (!existingIds.has(ev.id)) {
+                await appendEvent(ev);
+                imported++;
+            }
+        }
+        process.stderr.write(chalk.gray(`  Imported ${imported} new invocations (${scanned.length - imported} already stored).\n\n`));
     }
     let events = await readEvents();
     if (opts.since)
@@ -121,7 +133,8 @@ program
         events = events.filter(e => e.skillName === opts.skill);
     if (opts.session)
         events = events.filter(e => e.sessionId === opts.session);
-    events = events.slice(-Number(opts.limit));
+    const limit = Math.max(1, parseInt(opts.limit, 10) || 50);
+    events = events.slice(-limit);
     if (opts.compact) {
         console.log(renderCompact(events));
     }
@@ -146,17 +159,22 @@ program
         console.log(chalk.yellow("  No invocations found."));
         return;
     }
-    for (const ev of events)
-        await appendEvent(ev);
-    console.log(chalk.green(`✓  Imported ${events.length} invocations.`));
-    // Show the dashboard right away
+    const existingIds = new Set((await readEvents()).map((e) => e.id));
+    let imported = 0;
+    for (const ev of events) {
+        if (!existingIds.has(ev.id)) {
+            await appendEvent(ev);
+            imported++;
+        }
+    }
+    console.log(chalk.green(`✓  Imported ${imported} new invocations (${events.length - imported} already stored).`));
     console.log("\n" + renderDashboard(events));
 });
 // ─── report (browser HTML) ────────────────────────────────────────────────────
 program
     .command("report")
     .description("Generate an interactive HTML report and open in browser")
-    .option("-o, --output <path>", "Output path", "/tmp/cc-skill-trace-report.html")
+    .option("-o, --output <path>", "Output path", join(homedir(), ".cc-skill-trace", "report.html"))
     .option("--no-open", "Don't open browser")
     .option("--since <date>", "Filter from date")
     .option("--scan", "Scan session logs first")
