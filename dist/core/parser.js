@@ -1,9 +1,8 @@
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { createInterface } from "node:readline";
-import { randomUUID } from "node:crypto";
 const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
 // ─── JSONL file helpers ──────────────────────────────────────────────────────
 async function* readJsonlFile(filePath) {
@@ -102,9 +101,11 @@ export async function extractInvocationsFromFile(filePath) {
             // User invocations appear immediately after a user message starting with "/" + skillName
             const isUserInvoked = triggerMessage?.trimStart().startsWith(`/${skillName}`) ?? false;
             events.push({
-                id: randomUUID(),
+                // Use the tool_use block ID as event ID — it is globally unique per invocation
+                // and stable across repeated scans of the same session file.
+                id: call.id,
                 timestamp: entry.timestamp,
-                sessionId: entry.sessionId ?? filePath.split("/").pop()?.replace(".jsonl", "") ?? "unknown",
+                sessionId: entry.sessionId ?? basename(filePath, ".jsonl"),
                 skillName,
                 skillArgs,
                 source: isUserInvoked ? "user" : "claude",

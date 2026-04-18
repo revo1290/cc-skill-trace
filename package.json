@@ -36,6 +36,10 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx/esm --test src/core/store.test.ts src/core/parser.test.ts src/cli/format.test.ts",
+    "release:patch": "npm run build && npm version patch -m 'chore: release v%s' && git push origin main --follow-tags",
+    "release:minor": "npm run build && npm version minor -m 'chore: release v%s' && git push origin main --follow-tags",
+    "release:major": "npm run build && npm version major -m 'chore: release v%s' && git push origin main --follow-tags",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
@@ -44,6 +48,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.4.5"
   }
 }

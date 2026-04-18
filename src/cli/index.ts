@@ -5,12 +5,14 @@ import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
-import { readEvents, clearEvents, appendEvent, STORE_DIR } from "../core/store.js";
+import { createRequire } from "node:module";
+import { readEvents, clearEvents, appendEvent } from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
 import { renderDashboard, renderCompact } from "./format.js";
 
-const VERSION = "0.1.1";
+const _require = createRequire(import.meta.url);
+const VERSION = (_require("../../package.json") as { version: string }).version;
 
 program
   .name("cc-skill-trace")
@@ -77,7 +79,11 @@ program
     for await (const chunk of process.stdin) raw += chunk;
 
     let payload: { session_id?: string; tool_name?: string; tool_input?: { skill?: string; args?: string }; user_invoked?: boolean; cwd?: string; git_branch?: string };
-    try { payload = JSON.parse(raw); } catch { process.exit(0); }
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") { process.exit(0); }
+      payload = parsed as typeof payload;
+    } catch { process.exit(0); }
     if (payload.tool_name !== "Skill" || !payload.tool_input?.skill) { process.exit(0); }
 
     const { randomUUID } = await import("node:crypto");
@@ -111,15 +117,20 @@ program
     if (opts.scan) {
       process.stderr.write(chalk.gray("  Scanning ~/.claude/projects/ …\n"));
       const scanned = await extractAllInvocations({ since: opts.since });
-      for (const ev of scanned) await appendEvent(ev);
-      process.stderr.write(chalk.gray(`  Imported ${scanned.length} invocations.\n\n`));
+      const existingIds = new Set((await readEvents()).map((e) => e.id));
+      let imported = 0;
+      for (const ev of scanned) {
+        if (!existingIds.has(ev.id)) { await appendEvent(ev); imported++; }
+      }
+      process.stderr.write(chalk.gray(`  Imported ${imported} new invocations (${scanned.length - imported} already stored).\n\n`));
     }
 
     let events = await readEvents();
     if (opts.since)   events = events.filter(e => e.timestamp >= opts.since);
     if (opts.skill)   events = events.filter(e => e.skillName === opts.skill);
     if (opts.session) events = events.filter(e => e.sessionId === opts.session);
-    events = events.slice(-Number(opts.limit));
+    const limit = Math.max(1, parseInt(opts.limit as string, 10) || 50);
+    events = events.slice(-limit);
 
     if (opts.compact) {
       console.log(renderCompact(events));
@@ -139,9 +150,12 @@ program
     console.log(chalk.gray("  Scanning ~/.claude/projects/ …"));
     const events = await extractAllInvocations({ since: opts.since });
     if (events.length === 0) { console.log(chalk.yellow("  No invocations found.")); return; }
-    for (const ev of events) await appendEvent(ev);
-    console.log(chalk.green(`✓  Imported ${events.length} invocations.`));
-    // Show the dashboard right away
+    const existingIds = new Set((await readEvents()).map((e) => e.id));
+    let imported = 0;
+    for (const ev of events) {
+      if (!existingIds.has(ev.id)) { await appendEvent(ev); imported++; }
+    }
+    console.log(chalk.green(`✓  Imported ${imported} new invocations (${events.length - imported} already stored).`));
     console.log("\n" + renderDashboard(events));
   });
 
@@ -149,7 +163,7 @@ program
 program
   .command("report")
   .description("Generate an interactive HTML report and open in browser")
-  .option("-o, --output <path>", "Output path", "/tmp/cc-skill-trace-report.html")
+  .option("-o, --output <path>", "Output path", join(homedir(), ".cc-skill-trace", "report.html"))
   .option("--no-open", "Don't open browser")
   .option("--since <date>", "Filter from date")
   .option("--scan", "Scan session logs first")

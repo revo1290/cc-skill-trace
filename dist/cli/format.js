@@ -117,8 +117,9 @@ export function renderDashboard(events) {
     lines.push("");
     for (const s of stats.slice(0, 8)) {
         const autoB = "█".repeat(Math.round((s.auto / maxTotal) * barW));
-        const userB = "█".repeat(Math.round((s.byUser / maxTotal) * barW));
-        const emptyB = "░".repeat(barW - autoB.length - userB.length);
+        const userFill = Math.min(barW - autoB.length, Math.round((s.byUser / maxTotal) * barW));
+        const userB = "█".repeat(userFill);
+        const emptyB = "░".repeat(Math.max(0, barW - autoB.length - userB.length));
         const nameLabel = padRight(chalk.bold.yellow(s.name), nameW + 9 /* ansi overhead approx */);
         lines.push("  " + nameLabel + "  " +
             chalk.magenta(autoB) + chalk.cyan(userB) + chalk.gray(emptyB) +
