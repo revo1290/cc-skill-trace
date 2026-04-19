@@ -58,5 +58,5 @@ Offer these options:
 ## Notes
 
 - The dashboard uses box-drawing characters and ANSI colors — always show in a fenced code block with no language tag.
-- If the user asks "why did skill X fire?", run `cc-skill-trace show --skill X --cards` for the full trigger context per invocation.
+- If the user asks "why did skill X fire?", run `cc-skill-trace show --skill X` for the full trigger context per invocation.
 - If the event store is empty and `--scan` found nothing, the hook may not be installed yet — run `cc-skill-trace install`.

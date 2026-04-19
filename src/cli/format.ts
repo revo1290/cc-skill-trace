@@ -46,8 +46,8 @@ function bar(ratio: number, width: number, color: (s: string) => string): string
 }
 
 function fmtTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("ja-JP", {
-    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  return new Date(iso).toLocaleTimeString(undefined, {
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
   });
 }
 

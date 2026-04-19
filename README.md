@@ -1,14 +1,14 @@
 # cc-skill-trace
 
-**Claude Code のスキル発動デバッガー＆ビジュアライザー**
+**Skill invocation debugger & visualizer for Claude Code**
 
-どのスキルが・いつ・なぜ自動発動されたかをターミナルで即確認できる Claude Code プラグイン。
+See which Claude Code skills fired, when, and why — in your terminal or in an interactive browser dashboard.
 
 ---
 
-## ターミナルダッシュボード
+## Terminal Dashboard
 
-`cc-skill-trace show` を実行すると以下のような表示が出ます:
+Run `cc-skill-trace show` to get an instant view:
 
 ```
 ════════════════════════════════════════════════════════════════════════════════
@@ -31,8 +31,8 @@
 
   🕐 Recent invocations  (newest first)
 
-  ● 14:34:55  commit     🤖 auto  "テストが通ったらPRを作って"
-  ● 14:31:07  commit     🤖 auto  "この変更をコミットして"
+  ● 14:34:55  commit     🤖 auto  "tests passed, please open a PR"
+  ● 14:31:07  commit     🤖 auto  "commit this change"
   ● 14:28:44  review-pr  👤 user  "/review-pr 123"
 
 ────────────────────────────────────────────────────────────────────────────────
@@ -42,87 +42,76 @@
 
 ---
 
-## インストール
-
-### npm（推奨）
+## Installation
 
 ```bash
 npm install -g cc-skill-trace
 ```
 
-> npm 未公開の場合は下記の GitHub インストールをご利用ください。
-
-### GitHub から直接インストール
-
-```bash
-npm install -g github:revo1290/cc-skill-trace
-```
-
-### ソースからビルド
+### Install from source
 
 ```bash
 git clone https://github.com/revo1290/cc-skill-trace.git
 cd cc-skill-trace
-npm install
-npm run build
+npm install && npm run build
 npm link
 ```
 
 ---
 
-## セットアップ
+## Setup
 
 ```bash
-# Claude Code に hook + /skill-trace スキルを登録
+# Register the capture hook + /skill-trace skill in Claude Code
 cc-skill-trace install
 
-# Claude Code を再起動
+# Restart Claude Code
 ```
 
-これだけです。以降、スキルが発動するたびに自動でキャプチャされます。
+That's it. Every subsequent skill invocation is captured automatically.
 
-### Claude Code 内から使う（プラグイン）
+### Use inside Claude Code (as a plugin)
 
-Claude Code のチャットで `/skill-trace` と打つだけでダッシュボードを表示し、「なぜこのスキルが自動発動したか」を Claude が解説します。
+Type `/skill-trace` in the Claude Code chat to open the dashboard and have Claude explain why each skill was auto-triggered.
 
 ---
 
-## CLI コマンド
+## CLI Commands
 
 ```bash
-# ターミナルダッシュボード（デフォルト）
+# Terminal dashboard (default)
 cc-skill-trace show
 
-# 過去のセッションログを遡ってインポート＋表示
+# Backfill from past session logs, then show
 cc-skill-trace show --scan
 
-# ブラウザでインタラクティブレポートを開く（グラフ付き）
+# Open interactive browser dashboard with charts
 cc-skill-trace report
 
-# 特定スキルだけ絞り込み
+# Filter by skill name
 cc-skill-trace show --skill commit
 
-# 日付フィルタ
+# Filter by date
 cc-skill-trace show --since 2026-04-10
 
-# コンパクトな一行リスト
+# Compact one-line list
 cc-skill-trace show --compact
 
-# hook + skill を登録（install の手動実行）
-cc-skill-trace install             # グローバル (~/.claude/settings.json)
-cc-skill-trace install --project   # プロジェクトレベル (.claude/settings.json)
+# Register hook + skill
+cc-skill-trace install             # global (~/.claude/settings.json)
+cc-skill-trace install --project   # project-level (.claude/settings.json)
 
-# イベントストアをリセット
+# Reset the event store
 cc-skill-trace clear
 ```
 
 ---
 
-## 仕組み
+## How it works
 
-### 1. リアルタイムキャプチャ（PreToolUse hook）
+### 1. Real-time capture (PreToolUse hook)
 
-`cc-skill-trace install` が `~/.claude/settings.json` に以下を追加します:
+`cc-skill-trace install` adds the following to `~/.claude/settings.json`:
 
 ```json
 {
@@ -135,35 +124,47 @@ cc-skill-trace clear
 }
 ```
 
-スキルが呼ばれるたびに `hook-capture` が起動し `~/.cc-skill-trace/events.jsonl` に追記。  
-常に `{}` を返して **Claude Code の処理をブロックしません**。
+Every time a skill is invoked, `hook-capture` fires and appends an event to `~/.cc-skill-trace/events.jsonl`.
+It always returns `{}` and **never blocks Claude Code**.
 
-### 2. 遡り解析（scan）
+### 2. Retroactive scan
 
-`~/.claude/projects/**/*.jsonl` のセッションログを解析し、過去のスキル発動を抽出します。  
-直前のユーザー発言（トリガーメッセージ）も合わせて取得します。
+`~/.claude/projects/**/*.jsonl` session logs are parsed to extract past skill invocations, including the user message that preceded each one (the "trigger").
 
-### 3. Claude Code Skill（/skill-trace）
+### 3. Claude Code skill (`/skill-trace`)
 
-`~/.claude/skills/skill-trace/SKILL.md` をインストールすることで、  
-Claude Code のチャットから `/skill-trace` でダッシュボードを呼べます。  
-Claude が結果を解釈して「なぜ auto-trigger が多いか」などをコメントします。
+Installing `~/.claude/skills/skill-trace/SKILL.md` lets you call `/skill-trace` from the Claude Code chat.
+Claude runs the dashboard and interprets the results — explaining why an auto-trigger rate is high, which skills fire unexpectedly, and how to narrow skill descriptions.
 
 ---
 
-## データの保存場所
+## Data storage
 
 ```
 ~/.cc-skill-trace/
-└── events.jsonl   # ローカル保存のみ。外部送信なし。
+└── events.jsonl   # stored locally only — nothing is sent externally
 ```
 
 ---
 
 ## Requirements
 
-- Node.js 18 以上
-- Claude Code（Claude Code でのスキル機能が必要）
+- Node.js 18 or later
+- Claude Code (with skill support)
+
+---
+
+## Releasing a new version
+
+Releases are automated via GitHub Actions. To publish:
+
+```bash
+# Bump version and create a tag
+npm version patch   # or minor / major
+git push origin main --follow-tags
+```
+
+The `release.yml` workflow triggers on `v*.*.*` tags, runs the full test suite, creates a GitHub Release, and publishes to npm automatically.
 
 ---
 
