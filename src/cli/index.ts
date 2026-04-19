@@ -170,8 +170,12 @@ program
   .action(async (opts) => {
     if (opts.scan) {
       const evs = await extractAllInvocations({ since: opts.since });
-      for (const ev of evs) await appendEvent(ev);
-      console.log(chalk.gray(`  Scanned: ${evs.length} invocations.`));
+      const existingIds = new Set((await readEvents()).map((e) => e.id));
+      let imported = 0;
+      for (const ev of evs) {
+        if (!existingIds.has(ev.id)) { await appendEvent(ev); imported++; }
+      }
+      console.log(chalk.gray(`  Scanned: ${evs.length} invocations (${imported} new).`));
     }
     let events = await readEvents();
     if (opts.since) events = events.filter(e => e.timestamp >= opts.since);

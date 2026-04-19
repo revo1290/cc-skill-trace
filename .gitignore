@@ -1,4 +1,6 @@
 node_modules/
+dist/
+skills/
 .env
 .env.local
 *.log

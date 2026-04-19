@@ -53,7 +53,7 @@ export function buildHtmlReport(events: SkillInvocationEvent[]): string {
   );
 
   return /* html */ `<!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -107,7 +107,7 @@ export function buildHtmlReport(events: SkillInvocationEvent[]): string {
   <span>🔍</span>
   <h1>cc-skill-trace</h1>
   <span class="badge">Skill Invocation Report</span>
-  <span style="margin-left:auto;color:var(--muted);font-size:12px">Generated: ${escapeHtml(new Date().toLocaleString("ja-JP"))}</span>
+  <span style="margin-left:auto;color:var(--muted);font-size:12px">Generated: ${escapeHtml(new Date().toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }))}</span>
 </div>
 
 <div class="stats">
@@ -147,7 +147,7 @@ export function buildHtmlReport(events: SkillInvocationEvent[]): string {
 </div>
 
 <div class="search-bar">
-  <input type="text" id="searchInput" placeholder="スキル名 or トリガーメッセージで検索…" />
+  <input type="text" id="searchInput" placeholder="Filter by skill name or trigger message…" />
 </div>
 
 <div class="timeline">
@@ -214,7 +214,7 @@ function renderList() {
   document.getElementById('countLabel').textContent = '(' + filtered.length + ' events)';
   const list = document.getElementById('eventList');
   list.innerHTML = filtered.map((ev, i) => {
-    const time = new Date(ev.timestamp).toLocaleString('ja-JP');
+    const time = new Date(ev.timestamp).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
     const srcCls = ev.source === 'user' ? 'source-user' : 'source-claude';
     const srcLabel = ev.source === 'user' ? '👤 user' : '🤖 claude';
     const skillDisplay = escapeHtml(ev.skillName) + (ev.skillArgs
@@ -245,11 +245,11 @@ function toggleDetail(card, idx) {
     : '';
   const triggerHtml = ev.triggerMessage
     ? escapeHtml(ev.triggerMessage)
-    : '（取得できませんでした。cc-skill-trace scan を実行してください）';
+    : '(Not available — run cc-skill-trace scan to backfill)';
   panel.innerHTML = \`
     <div class="label">SESSION ID</div>
     <div class="content" style="margin-bottom:12px">\${escapeHtml(ev.sessionId || '—')}</div>
-    <div class="label">TRIGGER MESSAGE (直前のユーザー発言)</div>
+    <div class="label">TRIGGER MESSAGE</div>
     <div class="content" style="margin-bottom:12px;color:#e6edf3">\${triggerHtml}</div>
     \${gitBranchHtml}
     \${tokensHtml}
