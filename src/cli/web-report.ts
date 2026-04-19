@@ -57,8 +57,11 @@ export function buildHtmlReport(events: SkillInvocationEvent[]): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; connect-src 'none'; frame-src 'none'; object-src 'none';">
 <title>cc-skill-trace — Skill Invocation Report</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"
+  integrity="sha384-T/4KgSWuZEPozpPz7rnnp/5lDSnpY1VPJCojf1S81uTHS1E38qgLfMgVsAeRCWc4"
+  crossorigin="anonymous"></script>
 <style>
   :root {
     --bg: #0d1117; --surface: #161b22; --border: #30363d;
