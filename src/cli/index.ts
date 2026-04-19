@@ -14,6 +14,16 @@ import { renderDashboard, renderCompact } from "./format.js";
 const _require = createRequire(import.meta.url);
 const VERSION = (_require("../../package.json") as { version: string }).version;
 
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.Z+-]*)?$/;
+
+function validateSince(value: string): string {
+  if (!ISO_DATE_RE.test(value) || isNaN(Date.parse(value))) {
+    console.error(chalk.red(`✗  Invalid --since value: "${value}". Expected ISO date, e.g. 2026-04-01`));
+    process.exit(1);
+  }
+  return value;
+}
+
 program
   .name("cc-skill-trace")
   .description("Skill invocation debugger & visualizer for Claude Code")
@@ -76,7 +86,11 @@ program
   .helpOption(false)
   .action(async () => {
     let raw = "";
-    for await (const chunk of process.stdin) raw += chunk;
+    const MAX_STDIN_BYTES = 1024 * 64; // 64 KB — hook payloads are tiny
+    for await (const chunk of process.stdin) {
+      raw += chunk;
+      if (Buffer.byteLength(raw) > MAX_STDIN_BYTES) { process.exit(0); }
+    }
 
     let payload: { session_id?: string; tool_name?: string; tool_input?: { skill?: string; args?: string }; user_invoked?: boolean; cwd?: string; git_branch?: string };
     try {
@@ -108,7 +122,7 @@ program
   .command("show", { isDefault: true })
   .description("Show the terminal skill-trace dashboard (default command)")
   .option("-n, --limit <n>", "Max recent events to show", "50")
-  .option("--since <date>", "Filter from this ISO date (e.g. 2026-04-01)")
+  .option("--since <date>", "Filter from this ISO date (e.g. 2026-04-01)", validateSince)
   .option("--skill <name>", "Filter by skill name")
   .option("--session <id>", "Filter by session ID")
   .option("--compact", "Compact table instead of dashboard")
@@ -143,7 +157,7 @@ program
 program
   .command("scan")
   .description("Retroactively scan Claude Code session logs (backfill)")
-  .option("--since <date>", "Only sessions newer than this date")
+  .option("--since <date>", "Only sessions newer than this date", validateSince)
   .option("--clear", "Clear existing events before scanning")
   .action(async (opts) => {
     if (opts.clear) { await clearEvents(); console.log(chalk.gray("  Cleared.")); }
@@ -165,7 +179,7 @@ program
   .description("Generate an interactive HTML report and open in browser")
   .option("-o, --output <path>", "Output path", join(homedir(), ".cc-skill-trace", "report.html"))
   .option("--no-open", "Don't open browser")
-  .option("--since <date>", "Filter from date")
+  .option("--since <date>", "Filter from date", validateSince)
   .option("--scan", "Scan session logs first")
   .action(async (opts) => {
     if (opts.scan) {
