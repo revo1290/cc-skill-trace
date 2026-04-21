@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-04-21
+
+### Added
+- `export` command — export events as JSON or CSV (`--format json|csv`, `-o <file>`, stdout-friendly for piping)
+- `uninstall` command — cleanly remove the capture hook from Claude Code settings (`--project` flag for project-level)
+- `show --before <date>` — upper-bound date filter to complement `--since`
+- `show --follow` — live-tail mode: refreshes dashboard every 2 seconds, exit with Ctrl+C
+- `clear --older-than <n>d` — prune old events (e.g. `--older-than 30d`) while keeping recent ones
+- `CC_PROJECTS_DIR` environment variable — override the default `~/.claude/projects` scan path
+- `pruneEvents` function in store module with 3 new tests (total tests: 21 → 24)
+
 ## [0.1.5] — 2026-04-19
 
 ### Security

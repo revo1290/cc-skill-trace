@@ -4,7 +4,7 @@ import { appendFile } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendEvent, readEvents, clearEvents } from "./store.js";
+import { appendEvent, readEvents, clearEvents, pruneEvents } from "./store.js";
 import type { SkillInvocationEvent } from "./types.js";
 
 function makeEvent(overrides: Partial<SkillInvocationEvent> = {}): SkillInvocationEvent {
@@ -85,6 +85,43 @@ describe("store", () => {
       await clearEvents(dir);
       const events = await readEvents(dir);
       assert.deepEqual(events, []);
+    });
+  });
+
+  describe("pruneEvents", () => {
+    beforeEach(async () => {
+      await clearEvents(dir);
+    });
+
+    it("removes events older than the cutoff and keeps newer ones", async () => {
+      await appendEvent(makeEvent({ id: "old-1", timestamp: "2020-01-01T00:00:00.000Z" }), dir);
+      await appendEvent(makeEvent({ id: "old-2", timestamp: "2020-06-15T00:00:00.000Z" }), dir);
+      await appendEvent(makeEvent({ id: "new-1", timestamp: "2026-01-01T00:00:00.000Z" }), dir);
+      await appendEvent(makeEvent({ id: "new-2", timestamp: "2026-04-01T00:00:00.000Z" }), dir);
+
+      const result = await pruneEvents("2025-01-01T00:00:00.000Z", dir);
+      assert.equal(result.removed, 2);
+      assert.equal(result.kept, 2);
+
+      const remaining = await readEvents(dir);
+      assert.equal(remaining.length, 2);
+      assert.deepEqual(remaining.map(e => e.id), ["new-1", "new-2"]);
+    });
+
+    it("returns zero removed when all events are newer than cutoff", async () => {
+      await appendEvent(makeEvent({ id: "a", timestamp: "2026-04-01T00:00:00.000Z" }), dir);
+      const result = await pruneEvents("2020-01-01T00:00:00.000Z", dir);
+      assert.equal(result.removed, 0);
+      assert.equal(result.kept, 1);
+    });
+
+    it("removes all events when all are older than cutoff", async () => {
+      await appendEvent(makeEvent({ id: "x", timestamp: "2020-01-01T00:00:00.000Z" }), dir);
+      const result = await pruneEvents("2026-01-01T00:00:00.000Z", dir);
+      assert.equal(result.removed, 1);
+      assert.equal(result.kept, 0);
+      const remaining = await readEvents(dir);
+      assert.deepEqual(remaining, []);
     });
   });
 });

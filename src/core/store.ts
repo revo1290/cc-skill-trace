@@ -38,3 +38,18 @@ export async function clearEvents(dir = STORE_DIR): Promise<void> {
   await ensureStoreDir(dir);
   await writeFile(join(dir, "events.jsonl"), "", "utf-8");
 }
+
+/** Remove events whose timestamp is older than `beforeIso` (ISO string).
+ *  Returns counts of removed and kept events. */
+export async function pruneEvents(
+  beforeIso: string,
+  dir = STORE_DIR,
+): Promise<{ removed: number; kept: number }> {
+  await ensureStoreDir(dir);
+  const events = await readEvents(dir);
+  const kept = events.filter((e) => e.timestamp >= beforeIso);
+  const removed = events.length - kept.length;
+  const content = kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : "");
+  await writeFile(join(dir, "events.jsonl"), content, "utf-8");
+  return { removed, kept: kept.length };
+}

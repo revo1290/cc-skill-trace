@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { readEvents, clearEvents, appendEvent } from "../core/store.js";
+import { readEvents, clearEvents, appendEvent, pruneEvents } from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
 import { renderDashboard, renderCompact } from "./format.js";
@@ -18,10 +18,21 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.Z+-]*)?$/;
 
 function validateSince(value: string): string {
   if (!ISO_DATE_RE.test(value) || isNaN(Date.parse(value))) {
-    console.error(chalk.red(`✗  Invalid --since value: "${value}". Expected ISO date, e.g. 2026-04-01`));
+    console.error(chalk.red(`✗  Invalid date value: "${value}". Expected ISO date, e.g. 2026-04-01`));
     process.exit(1);
   }
   return value;
+}
+
+function parseDuration(value: string): Date {
+  const match = /^(\d+)d$/i.exec(value);
+  if (!match) {
+    console.error(chalk.red(`✗  Invalid duration: "${value}". Expected format: 30d`));
+    process.exit(1);
+  }
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - parseInt(match[1]!, 10));
+  return cutoff;
 }
 
 program
@@ -123,10 +134,12 @@ program
   .description("Show the terminal skill-trace dashboard (default command)")
   .option("-n, --limit <n>", "Max recent events to show", "50")
   .option("--since <date>", "Filter from this ISO date (e.g. 2026-04-01)", validateSince)
+  .option("--before <date>", "Filter up to this ISO date (e.g. 2026-04-30)", validateSince)
   .option("--skill <name>", "Filter by skill name")
   .option("--session <id>", "Filter by session ID")
   .option("--compact", "Compact table instead of dashboard")
   .option("--scan", "Scan session logs before showing (backfill)")
+  .option("--follow", "Refresh dashboard every 2s (live tail)")
   .action(async (opts) => {
     if (opts.scan) {
       process.stderr.write(chalk.gray("  Scanning ~/.claude/projects/ …\n"));
@@ -139,13 +152,35 @@ program
       process.stderr.write(chalk.gray(`  Imported ${imported} new invocations (${scanned.length - imported} already stored).\n\n`));
     }
 
-    let events = await readEvents();
-    if (opts.since)   events = events.filter(e => e.timestamp >= opts.since);
-    if (opts.skill)   events = events.filter(e => e.skillName === opts.skill);
-    if (opts.session) events = events.filter(e => e.sessionId === opts.session);
-    const limit = Math.max(1, parseInt(opts.limit as string, 10) || 50);
-    events = events.slice(-limit);
+    const applyFilters = (all: Awaited<ReturnType<typeof readEvents>>) => {
+      let events = all;
+      if (opts.since)   events = events.filter(e => e.timestamp >= opts.since);
+      if (opts.before)  events = events.filter(e => e.timestamp <= opts.before);
+      if (opts.skill)   events = events.filter(e => e.skillName === opts.skill);
+      if (opts.session) events = events.filter(e => e.sessionId === opts.session);
+      const limit = Math.max(1, parseInt(opts.limit as string, 10) || 50);
+      return events.slice(-limit);
+    };
 
+    if (opts.follow) {
+      let lastEventTs = "";
+      const tick = async () => {
+        const events = applyFilters(await readEvents());
+        const newTs = events.at(-1)?.timestamp ?? "";
+        if (newTs !== lastEventTs) {
+          lastEventTs = newTs;
+          process.stdout.write("\x1B[2J\x1B[0f"); // clear screen, cursor home
+          process.stdout.write((opts.compact ? renderCompact(events) : renderDashboard(events)) + "\n");
+        }
+        process.stdout.write(chalk.gray(`  [Following — Ctrl+C to exit] `) + chalk.gray(new Date().toLocaleTimeString()) + "  \r");
+      };
+      await tick();
+      const interval = setInterval(tick, 2000);
+      process.on("SIGINT", () => { clearInterval(interval); process.stdout.write("\n"); process.exit(0); });
+      return;
+    }
+
+    const events = applyFilters(await readEvents());
     if (opts.compact) {
       console.log(renderCompact(events));
     } else {
@@ -209,9 +244,91 @@ program
 program
   .command("clear")
   .description("Clear all captured events")
-  .action(async () => {
-    await clearEvents();
-    console.log(chalk.green("✓  Cleared."));
+  .option("--older-than <duration>", "Remove events older than this (e.g. 30d, 7d)")
+  .action(async (opts) => {
+    if (opts.olderThan) {
+      const cutoff = parseDuration(String(opts.olderThan));
+      const { removed, kept } = await pruneEvents(cutoff.toISOString());
+      console.log(chalk.green(`✓  Removed ${removed} events older than ${opts.olderThan} (${kept} kept).`));
+    } else {
+      await clearEvents();
+      console.log(chalk.green("✓  Cleared."));
+    }
+  });
+
+// ─── export ───────────────────────────────────────────────────────────────────
+program
+  .command("export")
+  .description("Export captured events as JSON or CSV")
+  .option("--format <fmt>", "Output format: json | csv", "json")
+  .option("-o, --output <path>", "Output file path (default: stdout)")
+  .option("--since <date>", "Filter from this ISO date", validateSince)
+  .option("--skill <name>", "Filter by skill name")
+  .action(async (opts) => {
+    let events = await readEvents();
+    if (opts.since) events = events.filter(e => e.timestamp >= opts.since);
+    if (opts.skill) events = events.filter(e => e.skillName === opts.skill);
+
+    const fmt = String(opts.format).toLowerCase();
+    let out: string;
+
+    if (fmt === "csv") {
+      const headers: (keyof typeof events[0])[] = [
+        "id", "timestamp", "sessionId", "skillName", "skillArgs",
+        "source", "triggerMessage", "cwd", "gitBranch",
+      ];
+      const esc = (v: unknown) => {
+        const s = v == null ? "" : String(v);
+        return s.includes(",") || s.includes('"') || s.includes("\n")
+          ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      out = headers.join(",") + "\n" + events.map(e => headers.map(h => esc(e[h])).join(",")).join("\n");
+    } else if (fmt === "json") {
+      out = JSON.stringify(events, null, 2);
+    } else {
+      console.error(chalk.red(`✗  Unknown format: "${opts.format}". Use json or csv.`));
+      process.exit(1);
+    }
+
+    if (opts.output) {
+      await writeFile(opts.output, out, "utf-8");
+      console.error(chalk.green(`✓  Exported ${events.length} events → ${opts.output}`));
+    } else {
+      process.stdout.write(out + "\n");
+    }
+  });
+
+// ─── uninstall ────────────────────────────────────────────────────────────────
+program
+  .command("uninstall")
+  .description("Remove the capture hook from Claude Code settings")
+  .option("--project", "Uninstall from .claude/settings.json (project-level) instead of global")
+  .action(async (opts) => {
+    const settingsPath = opts.project
+      ? resolve(".claude/settings.json")
+      : join(homedir(), ".claude", "settings.json");
+
+    let settings: Record<string, unknown>;
+    try {
+      settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    } catch {
+      console.log(chalk.yellow("⚠  Settings file not found: " + settingsPath));
+      return;
+    }
+
+    const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
+    const preToolUse = (hooks.PreToolUse ?? []) as Array<Record<string, unknown>>;
+    const filtered = preToolUse.filter(h => !JSON.stringify(h).includes("cc-skill-trace"));
+
+    if (filtered.length === preToolUse.length) {
+      console.log(chalk.yellow("⚠  Hook not found in: " + settingsPath));
+      return;
+    }
+
+    settings.hooks = { ...hooks, PreToolUse: filtered };
+    await writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+    console.log(chalk.green("✓  Hook removed from: " + settingsPath));
+    console.log(chalk.gray("  Restart Claude Code for the change to take effect."));
   });
 
 program.parse();

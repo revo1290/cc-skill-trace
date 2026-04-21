@@ -5,7 +5,8 @@ import { join, basename } from "node:path";
 import { createInterface } from "node:readline";
 import type { SessionLogEntry, SkillInvocationEvent, ToolUse, ContentBlock } from "./types.js";
 
-const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
+const CLAUDE_PROJECTS_DIR =
+  process.env["CC_PROJECTS_DIR"] ?? join(homedir(), ".claude", "projects");
 
 // ─── JSONL file helpers ──────────────────────────────────────────────────────
 
