@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9] — 2026-04-22
+
+### Fixed
+- Replace unbounded `Promise.all` in `extractAllInvocations` with a concurrency-limited mapper (max 8 parallel file reads) — prevents fd exhaustion on large project directories
+
+### Added
+- Scan progress indicator: `Scanning N/M files…` on stderr for `scan`, `show --scan`, `stats --scan`, `report --scan`
+- `export --before <date>` filter for date-range exports (consistency with other commands)
+- `report --before <date>` and `report --skill <name>` filters
+
 ## [0.1.8] — 2026-04-22
 
 ### Changed

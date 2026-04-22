@@ -8,6 +8,25 @@ import type { SessionLogEntry, SkillInvocationEvent, ToolUse, ContentBlock } fro
 const CLAUDE_PROJECTS_DIR =
   process.env["CC_PROJECTS_DIR"] ?? join(homedir(), ".claude", "projects");
 
+// ─── Concurrency limiter ─────────────────────────────────────────────────────
+
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: (R | undefined)[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]!);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results as R[];
+}
+
 // ─── JSONL file helpers ──────────────────────────────────────────────────────
 
 async function* readJsonlFile(filePath: string): AsyncGenerator<SessionLogEntry> {
@@ -130,29 +149,32 @@ export async function extractInvocationsFromFile(
 
 /**
  * Scan all Claude Code session files and return skill invocation events.
+ * Processes files with a concurrency limit to avoid overwhelming the OS.
  * Pass `since` (ISO string) to limit to recent sessions.
+ * Pass `onProgress` to receive (done, total) updates during scanning.
  */
 export async function extractAllInvocations(opts: {
   since?: string;
   sessionId?: string;
+  onProgress?: (done: number, total: number) => void;
 } = {}): Promise<SkillInvocationEvent[]> {
   const files = await findAllSessionFiles();
   const allEvents: SkillInvocationEvent[] = [];
+  let done = 0;
 
-  await Promise.all(
-    files.map(async (file) => {
-      try {
-        const events = await extractInvocationsFromFile(file);
-        for (const ev of events) {
-          if (opts.since && ev.timestamp < opts.since) continue;
-          if (opts.sessionId && ev.sessionId !== opts.sessionId) continue;
-          allEvents.push(ev);
-        }
-      } catch {
-        // skip unreadable files
+  await mapWithLimit(files, 8, async (file) => {
+    try {
+      const events = await extractInvocationsFromFile(file);
+      for (const ev of events) {
+        if (opts.since && ev.timestamp < opts.since) continue;
+        if (opts.sessionId && ev.sessionId !== opts.sessionId) continue;
+        allEvents.push(ev);
       }
-    })
-  );
+    } catch {
+      // skip unreadable files
+    }
+    opts.onProgress?.(++done, files.length);
+  });
 
   return allEvents.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }

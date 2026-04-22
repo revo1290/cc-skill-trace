@@ -24,6 +24,11 @@ function validateSince(value: string): string {
   return value;
 }
 
+function scanProgress(done: number, total: number): void {
+  process.stderr.write(chalk.gray(`\r  Scanning ${done}/${total} files…`));
+  if (done === total) process.stderr.write("\n");
+}
+
 function parseDuration(value: string): Date {
   const match = /^(\d+)d$/i.exec(value);
   if (!match) {
@@ -142,8 +147,7 @@ program
   .option("--follow", "Refresh dashboard every 2s (live tail)")
   .action(async (opts) => {
     if (opts.scan) {
-      process.stderr.write(chalk.gray("  Scanning ~/.claude/projects/ …\n"));
-      const scanned = await extractAllInvocations({ since: opts.since });
+      const scanned = await extractAllInvocations({ since: opts.since, onProgress: scanProgress });
       const existingIds = new Set((await readEvents()).map((e) => e.id));
       let imported = 0;
       for (const ev of scanned) {
@@ -196,8 +200,7 @@ program
   .option("--clear", "Clear existing events before scanning")
   .action(async (opts) => {
     if (opts.clear) { await clearEvents(); console.log(chalk.gray("  Cleared.")); }
-    console.log(chalk.gray("  Scanning ~/.claude/projects/ …"));
-    const events = await extractAllInvocations({ since: opts.since });
+    const events = await extractAllInvocations({ since: opts.since, onProgress: scanProgress });
     if (events.length === 0) { console.log(chalk.yellow("  No invocations found.")); return; }
     const existingIds = new Set((await readEvents()).map((e) => e.id));
     let imported = 0;
@@ -215,10 +218,12 @@ program
   .option("-o, --output <path>", "Output path", join(homedir(), ".cc-skill-trace", "report.html"))
   .option("--no-open", "Don't open browser")
   .option("--since <date>", "Filter from date", validateSince)
+  .option("--before <date>", "Filter up to date", validateSince)
+  .option("--skill <name>", "Filter by skill name")
   .option("--scan", "Scan session logs first")
   .action(async (opts) => {
     if (opts.scan) {
-      const evs = await extractAllInvocations({ since: opts.since });
+      const evs = await extractAllInvocations({ since: opts.since, onProgress: scanProgress });
       const existingIds = new Set((await readEvents()).map((e) => e.id));
       let imported = 0;
       for (const ev of evs) {
@@ -227,7 +232,9 @@ program
       console.log(chalk.gray(`  Scanned: ${evs.length} invocations (${imported} new).`));
     }
     let events = await readEvents();
-    if (opts.since) events = events.filter(e => e.timestamp >= opts.since);
+    if (opts.since)  events = events.filter(e => e.timestamp >= opts.since);
+    if (opts.before) events = events.filter(e => e.timestamp <= opts.before);
+    if (opts.skill)  events = events.filter(e => e.skillName === opts.skill);
 
     const html = buildHtmlReport(events);
     await writeFile(opts.output, html, "utf-8");
@@ -266,8 +273,7 @@ program
   .option("--scan", "Scan session logs first")
   .action(async (opts) => {
     if (opts.scan) {
-      process.stderr.write(chalk.gray("  Scanning ~/.claude/projects/ …\n"));
-      const scanned = await extractAllInvocations({ since: opts.since });
+      const scanned = await extractAllInvocations({ since: opts.since, onProgress: scanProgress });
       const existingIds = new Set((await readEvents()).map((e) => e.id));
       let imported = 0;
       for (const ev of scanned) {
@@ -289,11 +295,13 @@ program
   .option("--format <fmt>", "Output format: json | csv", "json")
   .option("-o, --output <path>", "Output file path (default: stdout)")
   .option("--since <date>", "Filter from this ISO date", validateSince)
+  .option("--before <date>", "Filter up to this ISO date", validateSince)
   .option("--skill <name>", "Filter by skill name")
   .action(async (opts) => {
     let events = await readEvents();
-    if (opts.since) events = events.filter(e => e.timestamp >= opts.since);
-    if (opts.skill) events = events.filter(e => e.skillName === opts.skill);
+    if (opts.since)  events = events.filter(e => e.timestamp >= opts.since);
+    if (opts.before) events = events.filter(e => e.timestamp <= opts.before);
+    if (opts.skill)  events = events.filter(e => e.skillName === opts.skill);
 
     const fmt = String(opts.format).toLowerCase();
     let out: string;
