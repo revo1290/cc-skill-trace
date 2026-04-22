@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] — 2026-04-22
+
+### Changed
+- Optimize SKILL.md to reduce Claude token consumption (~60% shorter: 63 → 28 lines)
+  - Narrowed `description:` to prevent unintended auto-invocation
+  - Switch from `show --scan` to `show --scan --compact` so Claude reads smaller output
+  - Removed verbose step prose, kept only actionable instructions
+
 ## [0.1.7] — 2026-04-22
 
 ### Added
