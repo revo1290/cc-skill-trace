@@ -1,6 +1,6 @@
 {
   "name": "cc-skill-trace",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Skill invocation debugger and visualizer for Claude Code — see which skills fired, when, and why",
   "keywords": [
     "claude-code",
@@ -25,6 +25,14 @@
     "node": ">=18.0.0"
   },
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "bin": {
     "cc-skill-trace": "dist/cli/index.js"
   },

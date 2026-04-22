@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] — 2026-04-22
+
+### Added
+- `stats` command — daily activity bar chart and top sessions by invocation count
+- Programmatic API — `import { readEvents, extractAllInvocations, buildHtmlReport, ... } from 'cc-skill-trace'`
+- `package.json` `exports` field and `main`/`types` entries for library consumers
+
+### Changed
+- README fully rewritten: npm badges, complete CLI reference for all commands, Programmatic API table, `SkillInvocationEvent` schema docs
+
 ## [0.1.6] — 2026-04-21
 
 ### Added

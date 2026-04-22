@@ -85,6 +85,78 @@ export function buildStats(events: SkillInvocationEvent[]): SkillStat[] {
   return Object.values(map).sort((a, b) => b.total - a.total);
 }
 
+// ─── Stats view ──────────────────────────────────────────────────────────────
+
+export function renderStats(events: SkillInvocationEvent[]): string {
+  const lines: string[] = [];
+
+  lines.push(hr("═"));
+  lines.push(chalk.bold.white("  📈 cc-skill-trace ─ Stats"));
+  lines.push(hr("─"));
+
+  if (events.length === 0) {
+    lines.push(chalk.gray("\n  No events yet.\n"));
+    lines.push(hr("═"));
+    return lines.join("\n");
+  }
+
+  // ── Per-day breakdown (last 14 days) ──
+  const dayMap: Record<string, { total: number; auto: number }> = {};
+  for (const ev of events) {
+    const day = ev.timestamp.slice(0, 10);
+    if (!dayMap[day]) dayMap[day] = { total: 0, auto: 0 };
+    dayMap[day].total++;
+    if (ev.source === "claude") dayMap[day].auto++;
+  }
+  const days = Object.keys(dayMap).sort().slice(-14);
+  const maxDay = Math.max(...days.map(d => dayMap[d]!.total), 1);
+  const dayBarW = 24;
+
+  lines.push("");
+  lines.push(section("  📅 Daily activity") + chalk.gray("  (last 14 days)"));
+  lines.push("");
+  for (const day of days) {
+    const d = dayMap[day]!;
+    const autoB = "█".repeat(Math.round((d.auto / maxDay) * dayBarW));
+    const userFill = Math.min(dayBarW - autoB.length, Math.round(((d.total - d.auto) / maxDay) * dayBarW));
+    const userB = "█".repeat(userFill);
+    const emptyB = "░".repeat(Math.max(0, dayBarW - autoB.length - userB.length));
+    const label = padRight(chalk.gray(day), 12);
+    lines.push(
+      "  " + label + "  " +
+      chalk.magenta(autoB) + chalk.cyan(userB) + chalk.gray(emptyB) +
+      chalk.bold.white(`  ${d.total}x`)
+    );
+  }
+
+  // ── Top sessions ──
+  const sessMap: Record<string, number> = {};
+  for (const ev of events) {
+    sessMap[ev.sessionId] = (sessMap[ev.sessionId] ?? 0) + 1;
+  }
+  const topSessions = Object.entries(sessMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  lines.push("");
+  lines.push(hr("─"));
+  lines.push("");
+  lines.push(section("  🗂  Top sessions") + chalk.gray("  (by invocations)"));
+  lines.push("");
+  const maxSess = topSessions[0]?.[1] ?? 1;
+  const sessBarW = 20;
+  for (const [sessId, count] of topSessions) {
+    const filled = Math.round((count / maxSess) * sessBarW);
+    const b = chalk.yellow("█".repeat(filled)) + chalk.gray("░".repeat(sessBarW - filled));
+    const label = padRight(chalk.gray(sessId.slice(0, 20)), 22);
+    lines.push("  " + label + "  " + b + chalk.bold.white(`  ${count}x`));
+  }
+
+  lines.push("");
+  lines.push(hr("═"));
+  return lines.join("\n");
+}
+
 // ─── Main dashboard ───────────────────────────────────────────────────────────
 
 export function renderDashboard(events: SkillInvocationEvent[]): string {

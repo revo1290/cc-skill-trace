@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { readEvents, clearEvents, appendEvent, pruneEvents } from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
-import { renderDashboard, renderCompact } from "./format.js";
+import { renderDashboard, renderCompact, renderStats } from "./format.js";
 
 const _require = createRequire(import.meta.url);
 const VERSION = (_require("../../package.json") as { version: string }).version;
@@ -254,6 +254,32 @@ program
       await clearEvents();
       console.log(chalk.green("✓  Cleared."));
     }
+  });
+
+// ─── stats ────────────────────────────────────────────────────────────────────
+program
+  .command("stats")
+  .description("Show aggregated daily activity and top sessions")
+  .option("--since <date>", "Filter from this ISO date", validateSince)
+  .option("--before <date>", "Filter up to this ISO date", validateSince)
+  .option("--skill <name>", "Filter by skill name")
+  .option("--scan", "Scan session logs first")
+  .action(async (opts) => {
+    if (opts.scan) {
+      process.stderr.write(chalk.gray("  Scanning ~/.claude/projects/ …\n"));
+      const scanned = await extractAllInvocations({ since: opts.since });
+      const existingIds = new Set((await readEvents()).map((e) => e.id));
+      let imported = 0;
+      for (const ev of scanned) {
+        if (!existingIds.has(ev.id)) { await appendEvent(ev); imported++; }
+      }
+      process.stderr.write(chalk.gray(`  Imported ${imported} new invocations.\n\n`));
+    }
+    let events = await readEvents();
+    if (opts.since)  events = events.filter(e => e.timestamp >= opts.since);
+    if (opts.before) events = events.filter(e => e.timestamp <= opts.before);
+    if (opts.skill)  events = events.filter(e => e.skillName === opts.skill);
+    console.log(renderStats(events));
   });
 
 // ─── export ───────────────────────────────────────────────────────────────────
