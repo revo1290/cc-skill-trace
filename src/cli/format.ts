@@ -278,7 +278,7 @@ export function renderDashboard(events: SkillInvocationEvent[]): string {
 export function renderCompact(events: SkillInvocationEvent[]): string {
   const lines: string[] = [];
   lines.push(chalk.gray("time           skill                 src      trigger"));
-  lines.push(chalk.gray("─".repeat(78)));
+  lines.push(chalk.gray("─".repeat(W())));
   for (const ev of [...events].reverse()) {
     const t = fmtTime(ev.timestamp);
     const n = padRight(chalk.bold.yellow(ev.skillName), 22 + 9);

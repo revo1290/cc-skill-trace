@@ -200,7 +200,8 @@ new Chart(tlCtx, {
 // ── Event list ────────────────────────────────────────────────────────────
 let currentFilter = 'all';
 let currentSearch = '';
-let renderedEvents = [];
+// Keyed by event ID so detail panels remain correct after filter changes
+const eventById = new Map(EVENTS.map(ev => [ev.id, ev]));
 
 function renderList() {
   const filtered = EVENTS.filter(ev => {
@@ -213,10 +214,9 @@ function renderList() {
     return true;
   }).reverse(); // newest first
 
-  renderedEvents = filtered;
   document.getElementById('countLabel').textContent = '(' + filtered.length + ' events)';
   const list = document.getElementById('eventList');
-  list.innerHTML = filtered.map((ev, i) => {
+  list.innerHTML = filtered.map(ev => {
     const time = new Date(ev.timestamp).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
     const srcCls = ev.source === 'user' ? 'source-user' : 'source-claude';
     const srcLabel = ev.source === 'user' ? '👤 user' : '🤖 claude';
@@ -225,18 +225,18 @@ function renderList() {
       : '');
     const trigger = escapeHtml((ev.triggerMessage || '').slice(0, 100));
     return \`
-      <div class="event-card" onclick="toggleDetail(this, \${i})">
+      <div class="event-card" onclick="toggleDetail(this, \${escapeHtml(JSON.stringify(ev.id))})">
         <div class="time">\${escapeHtml(time)}</div>
         <div class="skill">\${skillDisplay}</div>
         <div><span class="source-badge \${srcCls}">\${srcLabel}</span></div>
         <div class="trigger">\${trigger ? '"' + trigger + '"' : '<span style="color:#30363d">—</span>'}</div>
-        <div class="detail-panel" id="detail-\${i}"></div>
+        <div class="detail-panel"></div>
       </div>\`;
   }).join('');
 }
 
-function toggleDetail(card, idx) {
-  const ev = renderedEvents[idx];
+function toggleDetail(card, eventId) {
+  const ev = eventById.get(eventId);
   const panels = card.querySelectorAll('.detail-panel');
   const panel = panels[panels.length - 1];
   if (panel.style.display === 'block') { panel.style.display = 'none'; return; }

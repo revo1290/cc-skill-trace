@@ -24,19 +24,32 @@ function validateSince(value: string): string {
   return value;
 }
 
+function validateLimit(value: string): string {
+  const n = parseInt(value, 10);
+  if (isNaN(n) || n < 1 || String(n) !== value.trim()) {
+    console.error(chalk.red(`✗  Invalid --limit value: "${value}". Expected a positive integer, e.g. 50`));
+    process.exit(1);
+  }
+  return value;
+}
+
 function scanProgress(done: number, total: number): void {
   process.stderr.write(chalk.gray(`\r  Scanning ${done}/${total} files…`));
   if (done === total) process.stderr.write("\n");
 }
 
 function parseDuration(value: string): Date {
-  const match = /^(\d+)d$/i.exec(value);
+  const match = /^(\d+)(h|d|w)$/i.exec(value);
   if (!match) {
-    console.error(chalk.red(`✗  Invalid duration: "${value}". Expected format: 30d`));
+    console.error(chalk.red(`✗  Invalid duration: "${value}". Expected format: 12h, 30d, or 4w`));
     process.exit(1);
   }
+  const n = parseInt(match[1]!, 10);
+  const unit = match[2]!.toLowerCase();
   const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - parseInt(match[1]!, 10));
+  if (unit === "h") cutoff.setHours(cutoff.getHours() - n);
+  else if (unit === "d") cutoff.setDate(cutoff.getDate() - n);
+  else cutoff.setDate(cutoff.getDate() - n * 7);
   return cutoff;
 }
 
@@ -97,7 +110,7 @@ program
 
 // ─── hook-capture (called by Claude Code automatically) ──────────────────────
 program
-  .command("hook-capture")
+  .command("hook-capture", { hidden: true })
   .description("Internal: receives PreToolUse hook payload via stdin")
   .helpOption(false)
   .action(async () => {
@@ -137,7 +150,7 @@ program
 program
   .command("show", { isDefault: true })
   .description("Show the terminal skill-trace dashboard (default command)")
-  .option("-n, --limit <n>", "Max recent events to show", "50")
+  .option("-n, --limit <n>", "Max recent events to show", validateLimit, "50")
   .option("--since <date>", "Filter from this ISO date (e.g. 2026-04-01)", validateSince)
   .option("--before <date>", "Filter up to this ISO date (e.g. 2026-04-30)", validateSince)
   .option("--skill <name>", "Filter by skill name")
@@ -162,7 +175,7 @@ program
       if (opts.before)  events = events.filter(e => e.timestamp <= opts.before);
       if (opts.skill)   events = events.filter(e => e.skillName === opts.skill);
       if (opts.session) events = events.filter(e => e.sessionId === opts.session);
-      const limit = Math.max(1, parseInt(opts.limit as string, 10) || 50);
+      const limit = parseInt(opts.limit as string, 10);
       return events.slice(-limit);
     };
 
@@ -180,7 +193,9 @@ program
       };
       await tick();
       const interval = setInterval(tick, 2000);
-      process.on("SIGINT", () => { clearInterval(interval); process.stdout.write("\n"); process.exit(0); });
+      const cleanup = () => { clearInterval(interval); process.stdout.write("\n"); process.exit(0); };
+      process.on("SIGINT", cleanup);
+      process.on("SIGTERM", cleanup);
       return;
     }
 
@@ -241,9 +256,15 @@ program
     console.log(chalk.green(`✓  Report → ${opts.output}`));
 
     if (opts.open !== false) {
-      const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-      try { execFileSync(cmd, [opts.output], { stdio: "ignore" }); }
-      catch { console.log(chalk.gray(`  Open: ${opts.output}`)); }
+      try {
+        if (process.platform === "darwin") {
+          execFileSync("open", [opts.output], { stdio: "ignore" });
+        } else if (process.platform === "win32") {
+          execFileSync("cmd", ["/c", "start", "", opts.output], { stdio: "ignore" });
+        } else {
+          execFileSync("xdg-open", [opts.output], { stdio: "ignore" });
+        }
+      } catch { console.log(chalk.gray(`  Open: ${opts.output}`)); }
     }
   });
 
@@ -251,7 +272,7 @@ program
 program
   .command("clear")
   .description("Clear all captured events")
-  .option("--older-than <duration>", "Remove events older than this (e.g. 30d, 7d)")
+  .option("--older-than <duration>", "Remove events older than this (e.g. 12h, 30d, 4w)")
   .action(async (opts) => {
     if (opts.olderThan) {
       const cutoff = parseDuration(String(opts.olderThan));
@@ -316,7 +337,8 @@ program
         return s.includes(",") || s.includes('"') || s.includes("\n")
           ? `"${s.replace(/"/g, '""')}"` : s;
       };
-      out = headers.join(",") + "\n" + events.map(e => headers.map(h => esc(e[h])).join(",")).join("\n");
+      // UTF-8 BOM ensures Excel opens the file without garbling non-ASCII characters
+      out = "\uFEFF" + headers.join(",") + "\n" + events.map(e => headers.map(h => esc(e[h])).join(",")).join("\n");
     } else if (fmt === "json") {
       out = JSON.stringify(events, null, 2);
     } else {
