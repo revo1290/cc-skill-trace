@@ -362,6 +362,17 @@ program
     settings.hooks = { ...hooks, PreToolUse: filtered };
     await writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
     console.log(chalk.green("✓  Hook removed from: " + settingsPath));
+
+    // Remove the installed skill file
+    const { rm: rmFs } = await import("node:fs/promises");
+    const skillDir = join(homedir(), ".claude", "skills", "skill-trace");
+    try {
+      await rmFs(skillDir, { recursive: true, force: true });
+      console.log(chalk.green("✓  Skill removed   → " + skillDir));
+    } catch {
+      console.log(chalk.yellow("⚠  Could not remove skill directory: " + skillDir));
+    }
+
     console.log(chalk.gray("  Restart Claude Code for the change to take effect."));
   });
 
