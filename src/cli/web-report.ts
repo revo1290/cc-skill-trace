@@ -61,8 +61,10 @@ export function buildHtmlReport(events: SkillInvocationEvent[]): string {
 <title>cc-skill-trace — Skill Invocation Report</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"
   integrity="sha384-T/4KgSWuZEPozpPz7rnnp/5lDSnpY1VPJCojf1S81uTHS1E38qgLfMgVsAeRCWc4"
-  crossorigin="anonymous"></script>
+  crossorigin="anonymous"
+  onerror="document.getElementById('charts-section').innerHTML='<p class=\\'cdn-error\\'>⚠ Charts unavailable — Chart.js could not be loaded (no internet connection?). The event table below is still fully functional.</p>'"></script>
 <style>
+  .cdn-error { color: var(--muted); font-size: 12px; padding: 24px 0; text-align: center; }
   :root {
     --bg: #0d1117; --surface: #161b22; --border: #30363d;
     --text: #e6edf3; --muted: #8b949e; --accent: #f78166;
@@ -132,7 +134,7 @@ export function buildHtmlReport(events: SkillInvocationEvent[]): string {
   </div>
 </div>
 
-<div class="charts">
+<div id="charts-section" class="charts">
   <div class="chart-box">
     <h2>Top Skills by Invocations</h2>
     <canvas id="skillChart"></canvas>
@@ -174,28 +176,30 @@ function escapeHtml(s) {
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────
-const skillCtx = document.getElementById('skillChart').getContext('2d');
-new Chart(skillCtx, {
-  type: 'bar',
-  data: {
-    labels: TOP_SKILLS.map(([name]) => name),
-    datasets: [
-      { label: 'Claude', data: TOP_SKILLS.map(([,d]) => d.byClaude), backgroundColor: '#a78bfa80', borderColor: '#a78bfa', borderWidth: 1 },
-      { label: 'User',   data: TOP_SKILLS.map(([,d]) => d.byUser),   backgroundColor: '#38bdf880', borderColor: '#38bdf8', borderWidth: 1 },
-    ]
-  },
-  options: { responsive: true, plugins: { legend: { labels: { color: '#8b949e' } } }, scales: { x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } } }
-});
+if (typeof Chart !== 'undefined') {
+  const skillCtx = document.getElementById('skillChart').getContext('2d');
+  new Chart(skillCtx, {
+    type: 'bar',
+    data: {
+      labels: TOP_SKILLS.map(([name]) => name),
+      datasets: [
+        { label: 'Claude', data: TOP_SKILLS.map(([,d]) => d.byClaude), backgroundColor: '#a78bfa80', borderColor: '#a78bfa', borderWidth: 1 },
+        { label: 'User',   data: TOP_SKILLS.map(([,d]) => d.byUser),   backgroundColor: '#38bdf880', borderColor: '#38bdf8', borderWidth: 1 },
+      ]
+    },
+    options: { responsive: true, plugins: { legend: { labels: { color: '#8b949e' } } }, scales: { x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } } }
+  });
 
-const tlCtx = document.getElementById('timelineChart').getContext('2d');
-new Chart(tlCtx, {
-  type: 'line',
-  data: {
-    labels: BY_DAY.map(d => d.day),
-    datasets: [{ label: 'Invocations', data: BY_DAY.map(d => d.count), borderColor: '#f78166', backgroundColor: '#f7816620', fill: true, tension: 0.3 }]
-  },
-  options: { responsive: true, plugins: { legend: { labels: { color: '#8b949e' } } }, scales: { x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } } }
-});
+  const tlCtx = document.getElementById('timelineChart').getContext('2d');
+  new Chart(tlCtx, {
+    type: 'line',
+    data: {
+      labels: BY_DAY.map(d => d.day),
+      datasets: [{ label: 'Invocations', data: BY_DAY.map(d => d.count), borderColor: '#f78166', backgroundColor: '#f7816620', fill: true, tension: 0.3 }]
+    },
+    options: { responsive: true, plugins: { legend: { labels: { color: '#8b949e' } } }, scales: { x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } } }
+  });
+}
 
 // ── Event list ────────────────────────────────────────────────────────────
 let currentFilter = 'all';

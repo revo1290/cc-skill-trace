@@ -8,6 +8,10 @@ import type { SessionLogEntry, SkillInvocationEvent, ToolUse, ContentBlock } fro
 const CLAUDE_PROJECTS_DIR =
   process.env["CC_PROJECTS_DIR"] ?? join(homedir(), ".claude", "projects");
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // ─── Concurrency limiter ─────────────────────────────────────────────────────
 
 async function mapWithLimit<T, R>(
@@ -123,10 +127,17 @@ export async function extractInvocationsFromFile(
       const skillName = String(call.input.skill ?? call.input.name ?? "unknown");
       const skillArgs = call.input.args ? String(call.input.args) : undefined;
 
-      // Detect user-invoked vs Claude auto-invoked:
-      // User invocations appear immediately after a user message starting with "/" + skillName
-      const isUserInvoked =
-        triggerMessage?.trimStart().startsWith(`/${skillName}`) ?? false;
+      // Detect user-invoked vs Claude auto-invoked.
+      // A slash command typed by the user looks like "/<skillName>" or "/<plugin>:<skillName>"
+      // optionally followed by a space (for args) or end of string.
+      // We match both the full qualified name (plugin:skill) and the bare skill name so that
+      // "/pdf" matches skill "example-skills:pdf" as well as "pdf".
+      const bareSkillName = skillName.includes(":") ? skillName.split(":").pop()! : skillName;
+      const slashCmdRe = new RegExp(
+        `^/(${escapeRegExp(skillName)}|${escapeRegExp(bareSkillName)})(\\s|$)`,
+        "i",
+      );
+      const isUserInvoked = slashCmdRe.test(triggerMessage?.trimStart() ?? "");
 
       events.push({
         // Use the tool_use block ID as event ID — it is globally unique per invocation

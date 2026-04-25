@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { program } from "commander";
 import chalk from "chalk";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, rename, copyFile as fsCopyFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -31,6 +31,21 @@ function validateLimit(value: string): string {
     process.exit(1);
   }
   return value;
+}
+
+/**
+ * Atomically write JSON to `path`:
+ *  1. Back up the current file as `<path>.bak` (best-effort)
+ *  2. Write new content to `<path>.tmp`
+ *  3. Rename tmp → path  (atomic on POSIX; best-effort on Windows)
+ */
+async function writeSettingsAtomic(path: string, data: unknown): Promise<void> {
+  const json = JSON.stringify(data, null, 2);
+  const tmp  = path + ".tmp";
+  // Best-effort backup — don't fail if the original doesn't exist yet
+  try { await fsCopyFile(path, path + ".bak"); } catch { /* no original yet */ }
+  await writeFile(tmp, json, "utf-8");
+  await rename(tmp, path);
 }
 
 function scanProgress(done: number, total: number): void {
@@ -87,20 +102,20 @@ program
     });
     settings.hooks = { ...hooks, PreToolUse: preToolUse };
 
-    await writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+    await writeSettingsAtomic(settingsPath, settings);
     console.log(chalk.green("✓  Hook installed → " + settingsPath));
     console.log(chalk.gray("  Restart Claude Code for the hook to take effect."));
 
     // Also install the skill
     const skillDir = join(homedir(), ".claude", "skills", "skill-trace");
-    const { mkdir, copyFile } = await import("node:fs/promises");
+    const { mkdir } = await import("node:fs/promises");
     const { fileURLToPath } = await import("node:url");
     const { dirname } = await import("node:path");
     const here = dirname(fileURLToPath(import.meta.url));
     const skillSrc = join(here, "..", "skill", "SKILL.md");
     try {
       await mkdir(skillDir, { recursive: true });
-      await copyFile(skillSrc, join(skillDir, "SKILL.md"));
+      await fsCopyFile(skillSrc, join(skillDir, "SKILL.md"));
       console.log(chalk.green("✓  Skill installed   → " + skillDir));
       console.log(chalk.gray("  Use /skill-trace inside Claude Code to open the dashboard."));
     } catch {
@@ -382,7 +397,7 @@ program
     }
 
     settings.hooks = { ...hooks, PreToolUse: filtered };
-    await writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+    await writeSettingsAtomic(settingsPath, settings);
     console.log(chalk.green("✓  Hook removed from: " + settingsPath));
 
     // Remove the installed skill file

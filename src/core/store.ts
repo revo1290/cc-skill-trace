@@ -10,9 +10,28 @@ export async function ensureStoreDir(dir = STORE_DIR): Promise<void> {
   await mkdir(dir, { recursive: true });
 }
 
-export async function appendEvent(event: SkillInvocationEvent, dir = STORE_DIR): Promise<void> {
-  await ensureStoreDir(dir);
-  await appendFile(join(dir, "events.jsonl"), JSON.stringify(event) + "\n", "utf-8");
+// ─── Write serialization queue ───────────────────────────────────────────────
+// Multiple concurrent hook invocations can race on the same events.jsonl.
+// We serialize all mutating operations (append, clear, prune) per store dir
+// using a per-dir promise chain so writes never interleave.
+
+const writeQueues = new Map<string, Promise<void>>();
+
+function enqueueWrite<T = void>(dir: string, fn: () => Promise<T>): Promise<T> {
+  const prev = writeQueues.get(dir) ?? Promise.resolve();
+  const next = prev.then(() => fn(), () => fn());
+  // Store a void chain so the queue type stays consistent
+  writeQueues.set(dir, next.then(() => {}, () => {}));
+  return next;
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+export function appendEvent(event: SkillInvocationEvent, dir = STORE_DIR): Promise<void> {
+  return enqueueWrite(dir, async () => {
+    await ensureStoreDir(dir);
+    await appendFile(join(dir, "events.jsonl"), JSON.stringify(event) + "\n", "utf-8");
+  });
 }
 
 export async function readEvents(dir = STORE_DIR): Promise<SkillInvocationEvent[]> {
@@ -34,22 +53,26 @@ export async function readEvents(dir = STORE_DIR): Promise<SkillInvocationEvent[
   return events;
 }
 
-export async function clearEvents(dir = STORE_DIR): Promise<void> {
-  await ensureStoreDir(dir);
-  await writeFile(join(dir, "events.jsonl"), "", "utf-8");
+export function clearEvents(dir = STORE_DIR): Promise<void> {
+  return enqueueWrite(dir, async () => {
+    await ensureStoreDir(dir);
+    await writeFile(join(dir, "events.jsonl"), "", "utf-8");
+  });
 }
 
 /** Remove events whose timestamp is older than `beforeIso` (ISO string).
  *  Returns counts of removed and kept events. */
-export async function pruneEvents(
+export function pruneEvents(
   beforeIso: string,
   dir = STORE_DIR,
 ): Promise<{ removed: number; kept: number }> {
-  await ensureStoreDir(dir);
-  const events = await readEvents(dir);
-  const kept = events.filter((e) => e.timestamp >= beforeIso);
-  const removed = events.length - kept.length;
-  const content = kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : "");
-  await writeFile(join(dir, "events.jsonl"), content, "utf-8");
-  return { removed, kept: kept.length };
+  return enqueueWrite(dir, async () => {
+    await ensureStoreDir(dir);
+    const events = await readEvents(dir);
+    const kept = events.filter((e) => e.timestamp >= beforeIso);
+    const removed = events.length - kept.length;
+    const content = kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : "");
+    await writeFile(join(dir, "events.jsonl"), content, "utf-8");
+    return { removed, kept: kept.length };
+  });
 }
