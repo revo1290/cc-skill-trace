@@ -53,10 +53,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Create and push release tag
+      - name: Create signed release tag via GitHub API
         run: |
-          git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }}"
-          git push origin "v${{ inputs.version }}"
+          # Resolve the commit SHA the tag should point to (tip of release branch)
+          COMMIT_SHA=$(git rev-parse HEAD)
+          # Create an annotated tag object via the API.
+          # Tags created through the REST API with GITHUB_TOKEN are signed by GitHub
+          # and displayed as "Verified" on the repository.
+          TAG_SHA=$(gh api repos/${{ github.repository }}/git/tags \
+            --method POST \
+            --field tag="v${{ inputs.version }}" \
+            --field message="Release v${{ inputs.version }}" \
+            --field object="$COMMIT_SHA" \
+            --field type="commit" \
+            --jq '.sha')
+          # Create the lightweight ref pointing to the annotated tag object
+          gh api repos/${{ github.repository }}/git/refs \
+            --method POST \
+            --field ref="refs/tags/v${{ inputs.version }}" \
+            --field sha="$TAG_SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
