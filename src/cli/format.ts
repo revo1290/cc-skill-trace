@@ -7,14 +7,29 @@ function W(): number {
   return Math.min(process.stdout.columns ?? 80, 100);
 }
 
-/** Strip ANSI escape sequences to get visual string length. */
-function vlen(s: string): number {
-  // Remove ANSI codes then count: emoji = 2 cols, others = 1
+// Reuse a single Intl.Segmenter instance — it is stateless and safe to share.
+const _segmenter = new Intl.Segmenter();
+
+/**
+ * Visual (terminal column) length of a string.
+ *
+ * Uses Intl.Segmenter so that each ZWJ sequence (👨‍👩‍👧), variation-selector
+ * sequence (©️, 👍🏽), and keycap sequence (1️⃣) is treated as one grapheme
+ * cluster and counted as 2 columns rather than N×2 columns.
+ * ANSI escape sequences are stripped before measuring.
+ */
+export function vlen(s: string): number {
   const plain = s.replace(/\x1B\[[0-9;]*m/g, "");
   let len = 0;
-  for (const ch of plain) {
-    const cp = ch.codePointAt(0) ?? 0;
-    // Wide chars: CJK, emoji ranges
+  for (const { segment } of _segmenter.segment(plain)) {
+    const cp = segment.codePointAt(0) ?? 0;
+    // Lone ZWJ or variation selectors that start a segment are zero-width
+    if (cp === 0x200D || cp === 0xFE0F || cp === 0xFE0E) continue;
+    // Keycap sequences (1️⃣ #️⃣): base char is ASCII but renders 2 columns wide
+    if (segment.includes("\u20E3")) { len += 2; continue; }
+    // Text→emoji via VS16 (©️ ™️): base char not in emoji range but renders 2 wide
+    if (segment.includes("\uFE0F")) { len += 2; continue; }
+    // Wide chars: CJK ideographs, Hangul, fullwidth forms, emoji block
     if (
       (cp >= 0x1100 && cp <= 0x115F) ||
       (cp >= 0x2E80 && cp <= 0x303E) ||
@@ -25,7 +40,7 @@ function vlen(s: string): number {
       (cp >= 0xFE30 && cp <= 0xFE4F) ||
       (cp >= 0xFF00 && cp <= 0xFF60) ||
       (cp >= 0xFFE0 && cp <= 0xFFE6) ||
-      (cp >= 0x1F300 && cp <= 0x1FAFF) // emoji
+      (cp >= 0x1F300 && cp <= 0x1FAFF)
     ) {
       len += 2;
     } else {

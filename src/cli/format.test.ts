@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildStats, renderDashboard, renderCompact } from "./format.js";
+import { buildStats, renderDashboard, renderCompact, vlen } from "./format.js";
 import type { SkillInvocationEvent } from "../core/types.js";
 
 function makeEvent(overrides: Partial<SkillInvocationEvent> = {}): SkillInvocationEvent {
@@ -74,6 +74,45 @@ describe("renderDashboard", () => {
       makeEvent({ skillName: "only-skill", source: "claude" })
     );
     assert.doesNotThrow(() => renderDashboard(events));
+  });
+});
+
+describe("vlen", () => {
+  it("ASCII string counts 1 per char", () => {
+    assert.equal(vlen("hello"), 5);
+  });
+
+  it("CJK character counts 2", () => {
+    assert.equal(vlen("日"), 2);
+    assert.equal(vlen("日本語"), 6);
+  });
+
+  it("plain emoji counts 2", () => {
+    assert.equal(vlen("🎉"), 2);
+  });
+
+  it("ZWJ sequence counts as 2 (single grapheme)", () => {
+    // 👨‍👩‍👧 is man+ZWJ+woman+ZWJ+girl — one grapheme cluster, 2 cols
+    assert.equal(vlen("👨‍👩‍👧"), 2);
+  });
+
+  it("keycap sequence counts as 2", () => {
+    // 1️⃣ is '1' + VS16 (FE0F) + combining enclosing keycap (20E3)
+    assert.equal(vlen("1️⃣"), 2);
+  });
+
+  it("VS16 text-to-emoji counts as 2", () => {
+    // ©️ is copyright sign + VS16
+    assert.equal(vlen("©️"), 2);
+  });
+
+  it("ANSI escape codes are stripped before measuring", () => {
+    const colored = "\x1B[32mhi\x1B[0m";
+    assert.equal(vlen(colored), 2);
+  });
+
+  it("mixed ASCII and wide chars", () => {
+    assert.equal(vlen("A日B"), 4); // 1 + 2 + 1
   });
 });
 
