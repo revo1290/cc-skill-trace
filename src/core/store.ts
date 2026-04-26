@@ -25,6 +25,26 @@ function enqueueWrite<T = void>(dir: string, fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
+// ─── Read options ────────────────────────────────────────────────────────────
+
+export interface ReadEventsOptions {
+  /** Store directory (defaults to STORE_DIR) */
+  dir?: string;
+  /** Only return events with timestamp >= this ISO string */
+  since?: string;
+  /** Only return events with timestamp <= this ISO string */
+  before?: string;
+  /** Only return events for this skill name */
+  skill?: string;
+  /** Only return events for this session ID */
+  sessionId?: string;
+  /**
+   * Return at most this many events, taken from the most recent end (#18).
+   * Avoids loading unbounded datasets into memory for dashboards/exports.
+   */
+  limit?: number;
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export function appendEvent(event: SkillInvocationEvent, dir = STORE_DIR): Promise<void> {
@@ -34,21 +54,44 @@ export function appendEvent(event: SkillInvocationEvent, dir = STORE_DIR): Promi
   });
 }
 
-export async function readEvents(dir = STORE_DIR): Promise<SkillInvocationEvent[]> {
+/**
+ * Read events from the store, optionally applying filters at parse time to
+ * avoid loading the entire file into memory (#18).
+ *
+ * Accepts either a legacy `readEvents(dirString)` call or the new
+ * `readEvents(options)` form — both are supported for backward compatibility.
+ */
+export async function readEvents(opts: ReadEventsOptions | string = {}): Promise<SkillInvocationEvent[]> {
+  // Legacy: readEvents(dirString)
+  const options: ReadEventsOptions = typeof opts === "string" ? { dir: opts } : opts;
+  const dir = options.dir ?? STORE_DIR;
+
   let raw: string;
   try {
     raw = await readFile(join(dir, "events.jsonl"), "utf-8");
   } catch {
     return [];
   }
+
   const events: SkillInvocationEvent[] = [];
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     try {
-      events.push(JSON.parse(line) as SkillInvocationEvent);
+      const ev = JSON.parse(line) as SkillInvocationEvent;
+      // Apply filters at parse time — avoids accumulating excluded events in memory
+      if (options.since     && ev.timestamp  < options.since)     continue;
+      if (options.before    && ev.timestamp  > options.before)    continue;
+      if (options.skill     && ev.skillName !== options.skill)    continue;
+      if (options.sessionId && ev.sessionId !== options.sessionId) continue;
+      events.push(ev);
     } catch {
       // skip malformed lines without losing the rest
     }
+  }
+
+  // Apply limit: keep only the most recent N events
+  if (options.limit != null && events.length > options.limit) {
+    return events.slice(-options.limit);
   }
   return events;
 }

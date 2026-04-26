@@ -34,6 +34,27 @@ describe("store", () => {
       const events = await readEvents(dir + "-nonexistent");
       assert.deepEqual(events, []);
     });
+
+    it("filters by since/before at read time (#18)", async () => {
+      const filterDir = dir + "-filter";
+      await appendEvent(makeEvent({ id: "old", timestamp: "2020-01-01T00:00:00.000Z" }), filterDir);
+      await appendEvent(makeEvent({ id: "mid", timestamp: "2023-06-01T00:00:00.000Z" }), filterDir);
+      await appendEvent(makeEvent({ id: "new", timestamp: "2026-01-01T00:00:00.000Z" }), filterDir);
+      const recent = await readEvents({ dir: filterDir, since: "2023-01-01T00:00:00.000Z" });
+      assert.deepEqual(recent.map(e => e.id), ["mid", "new"]);
+      const range = await readEvents({ dir: filterDir, since: "2023-01-01T00:00:00.000Z", before: "2024-01-01T00:00:00.000Z" });
+      assert.deepEqual(range.map(e => e.id), ["mid"]);
+    });
+
+    it("respects limit option returning most recent events (#18)", async () => {
+      const limitDir = dir + "-limit";
+      for (let i = 1; i <= 5; i++) {
+        await appendEvent(makeEvent({ id: `ev-${i}`, timestamp: `2026-01-0${i}T00:00:00.000Z` }), limitDir);
+      }
+      const events = await readEvents({ dir: limitDir, limit: 3 });
+      assert.equal(events.length, 3);
+      assert.deepEqual(events.map(e => e.id), ["ev-3", "ev-4", "ev-5"]);
+    });
   });
 
   describe("appendEvent + readEvents", () => {

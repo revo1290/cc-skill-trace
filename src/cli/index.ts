@@ -204,20 +204,18 @@ program
       process.stderr.write(chalk.gray(`  Imported ${imported} new invocations (${scanned.length - imported} already stored).\n\n`));
     }
 
-    const applyFilters = (all: Awaited<ReturnType<typeof readEvents>>) => {
-      let events = all;
-      if (opts.since)   events = events.filter(e => e.timestamp >= opts.since);
-      if (opts.before)  events = events.filter(e => e.timestamp <= opts.before);
-      if (opts.skill)   events = events.filter(e => e.skillName === opts.skill);
-      if (opts.session) events = events.filter(e => e.sessionId === opts.session);
-      const limit = parseInt(opts.limit as string, 10);
-      return events.slice(-limit);
+    const readOpts = {
+      since: opts.since as string | undefined,
+      before: opts.before as string | undefined,
+      skill: opts.skill as string | undefined,
+      sessionId: opts.session as string | undefined,
+      limit: parseInt(opts.limit as string, 10),
     };
 
     if (opts.follow) {
       let lastEventTs = "";
       const tick = async () => {
-        const events = applyFilters(await readEvents());
+        const events = await readEvents(readOpts);
         const newTs = events.at(-1)?.timestamp ?? "";
         if (newTs !== lastEventTs) {
           lastEventTs = newTs;
@@ -234,7 +232,7 @@ program
       return;
     }
 
-    const events = applyFilters(await readEvents());
+    const events = await readEvents(readOpts);
     if (opts.compact) {
       console.log(renderCompact(events));
     } else {

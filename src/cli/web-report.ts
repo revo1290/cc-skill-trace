@@ -103,6 +103,8 @@ export function buildHtmlReport(events: SkillInvocationEvent[]): string {
   .filter-row { padding: 0 32px 16px; display: flex; gap: 10px; flex-wrap: wrap; }
   .filter-btn { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; color: var(--muted); padding: 4px 14px; cursor: pointer; font-family: inherit; font-size: 12px; transition: all 0.15s; }
   .filter-btn.active { border-color: var(--accent); color: var(--accent); }
+  #loadMoreBtn { display: none; margin: 16px auto 0; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--muted); padding: 8px 24px; cursor: pointer; font-family: inherit; font-size: 12px; transition: border-color 0.15s; }
+  #loadMoreBtn:hover { border-color: var(--accent); color: var(--accent); }
   @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } .event-card { grid-template-columns: 1fr 1fr; } }
 </style>
 </head>
@@ -158,6 +160,7 @@ export function buildHtmlReport(events: SkillInvocationEvent[]): string {
 <div class="timeline">
   <h2>Invocation Timeline <span id="countLabel" style="font-weight:400;color:var(--muted)"></span></h2>
   <div class="event-list" id="eventList"></div>
+  <button id="loadMoreBtn" onclick="loadMore()"></button>
 </div>
 
 <script>
@@ -201,14 +204,17 @@ if (typeof Chart !== 'undefined') {
   });
 }
 
-// ── Event list ────────────────────────────────────────────────────────────
+// ── Event list with pagination and debounced search (#19) ────────────────
+const PAGE_SIZE = 100;
 let currentFilter = 'all';
 let currentSearch = '';
+let currentPage = 0;
+let filteredEvents = [];
 // Keyed by event ID so detail panels remain correct after filter changes
 const eventById = new Map(EVENTS.map(ev => [ev.id, ev]));
 
-function renderList() {
-  const filtered = EVENTS.filter(ev => {
+function applyFilters() {
+  filteredEvents = EVENTS.filter(ev => {
     if (currentFilter === 'claude' && ev.source !== 'claude') return false;
     if (currentFilter === 'user'   && ev.source !== 'user')   return false;
     if (currentSearch) {
@@ -217,26 +223,59 @@ function renderList() {
     }
     return true;
   }).reverse(); // newest first
+}
 
-  document.getElementById('countLabel').textContent = '(' + filtered.length + ' events)';
+function eventCardHtml(ev) {
+  const time = new Date(ev.timestamp).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const srcCls = ev.source === 'user' ? 'source-user' : 'source-claude';
+  const srcLabel = ev.source === 'user' ? '👤 user' : '🤖 claude';
+  const skillDisplay = escapeHtml(ev.skillName) + (ev.skillArgs
+    ? \` <span style="color:#8b949e;font-weight:400">\${escapeHtml(ev.skillArgs.slice(0, 30))}</span>\`
+    : '');
+  const trigger = escapeHtml((ev.triggerMessage || '').slice(0, 100));
+  return \`
+    <div class="event-card" onclick="toggleDetail(this, \${escapeHtml(JSON.stringify(ev.id))})">
+      <div class="time">\${escapeHtml(time)}</div>
+      <div class="skill">\${skillDisplay}</div>
+      <div><span class="source-badge \${srcCls}">\${srcLabel}</span></div>
+      <div class="trigger">\${trigger ? '"' + trigger + '"' : '<span style="color:#30363d">—</span>'}</div>
+      <div class="detail-panel"></div>
+    </div>\`;
+}
+
+function renderList() {
+  applyFilters();
+  currentPage = 0;
+  const showing = Math.min(PAGE_SIZE, filteredEvents.length);
+  document.getElementById('countLabel').textContent =
+    '(' + showing + ' / ' + filteredEvents.length + ' events)';
   const list = document.getElementById('eventList');
-  list.innerHTML = filtered.map(ev => {
-    const time = new Date(ev.timestamp).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-    const srcCls = ev.source === 'user' ? 'source-user' : 'source-claude';
-    const srcLabel = ev.source === 'user' ? '👤 user' : '🤖 claude';
-    const skillDisplay = escapeHtml(ev.skillName) + (ev.skillArgs
-      ? \` <span style="color:#8b949e;font-weight:400">\${escapeHtml(ev.skillArgs.slice(0, 30))}</span>\`
-      : '');
-    const trigger = escapeHtml((ev.triggerMessage || '').slice(0, 100));
-    return \`
-      <div class="event-card" onclick="toggleDetail(this, \${escapeHtml(JSON.stringify(ev.id))})">
-        <div class="time">\${escapeHtml(time)}</div>
-        <div class="skill">\${skillDisplay}</div>
-        <div><span class="source-badge \${srcCls}">\${srcLabel}</span></div>
-        <div class="trigger">\${trigger ? '"' + trigger + '"' : '<span style="color:#30363d">—</span>'}</div>
-        <div class="detail-panel"></div>
-      </div>\`;
-  }).join('');
+  list.innerHTML = filteredEvents.slice(0, PAGE_SIZE).map(eventCardHtml).join('');
+  updateLoadMore();
+}
+
+function updateLoadMore() {
+  const shown = (currentPage + 1) * PAGE_SIZE;
+  const btn = document.getElementById('loadMoreBtn');
+  if (shown >= filteredEvents.length) {
+    btn.style.display = 'none';
+  } else {
+    const remaining = filteredEvents.length - shown;
+    btn.textContent = 'Load ' + Math.min(PAGE_SIZE, remaining) + ' more  (' + remaining + ' remaining)';
+    btn.style.display = 'block';
+  }
+}
+
+function loadMore() {
+  currentPage++;
+  const start = currentPage * PAGE_SIZE;
+  const end = start + PAGE_SIZE;
+  const shown = (currentPage + 1) * PAGE_SIZE;
+  const list = document.getElementById('eventList');
+  list.insertAdjacentHTML('beforeend', filteredEvents.slice(start, end).map(eventCardHtml).join(''));
+  document.getElementById('countLabel').textContent =
+    '(' + Math.min(shown, filteredEvents.length) + ' / ' + filteredEvents.length + ' events)';
+  updateLoadMore();
 }
 
 function toggleDetail(card, eventId) {
@@ -248,7 +287,7 @@ function toggleDetail(card, eventId) {
     ? \`<div class="label">GIT BRANCH</div><div class="content" style="margin-bottom:12px">\${escapeHtml(ev.gitBranch)}</div>\`
     : '';
   const tokensHtml = (ev.injectedTokens != null)
-    ? \`<div class="label">INJECTED TOKENS</div><div class="content">+\${Number(ev.injectedTokens).toLocaleString()} tokens</div>\`
+    ? \`<div class="label">INJECTED TOKENS</div><div class="content">~\${Number(ev.injectedTokens).toLocaleString()} tokens injected</div>\`
     : '';
   const triggerHtml = ev.triggerMessage
     ? escapeHtml(ev.triggerMessage)
@@ -273,9 +312,12 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
   });
 });
 
+// Debounce search input to avoid O(n) filtering on every keystroke (#19)
+let _searchTimer;
 document.getElementById('searchInput').addEventListener('input', e => {
   currentSearch = e.target.value;
-  renderList();
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(renderList, 200);
 });
 
 renderList();
