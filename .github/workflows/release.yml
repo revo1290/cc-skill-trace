@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
   id-token: write
 
 jobs:
@@ -36,14 +37,26 @@ jobs:
       - run: npm run build
       - run: npm test
 
-      - name: Commit version bump, tag, and push
+      - name: Push version bump as release branch and open PR
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "release/v${{ inputs.version }}"
           git add package.json package-lock.json
           git commit -m "chore: release v${{ inputs.version }}"
+          git push origin "release/v${{ inputs.version }}"
+          gh pr create \
+            --title "chore: release v${{ inputs.version }}" \
+            --body "Automated version bump. Merge after confirming the npm publish succeeded." \
+            --base main \
+            --head "release/v${{ inputs.version }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Create and push release tag
+        run: |
           git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }}"
-          git push origin main "v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
