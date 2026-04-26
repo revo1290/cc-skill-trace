@@ -4,12 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. 0.2.0) — must match package.json version'
+        description: 'Release version (e.g. 0.2.0) — must match package.json version on main'
         required: true
-        type: string
-      tag:
-        description: 'Git tag to release from (e.g. v0.2.0) — defaults to v<version>'
-        required: false
         type: string
 
 permissions:
@@ -22,10 +18,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Check out the latest main — the tag is created by this workflow
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-          ref: ${{ inputs.tag || format('v{0}', inputs.version) }}
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
@@ -37,7 +33,7 @@ jobs:
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
           if [ "$PKG_VERSION" != "${{ inputs.version }}" ]; then
-            echo "::error::package.json version ($PKG_VERSION) does not match input (${{ inputs.version }})"
+            echo "::error::package.json version ($PKG_VERSION) does not match input (${{ inputs.version }}). Update package.json first."
             exit 1
           fi
 
@@ -46,10 +42,17 @@ jobs:
       - run: npm run build
       - run: npm test
 
+      - name: Create and push release tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
-          tag_name: ${{ inputs.tag || format('v{0}', inputs.version) }}
+          tag_name: v${{ inputs.version }}
           generate_release_notes: true
           make_latest: true
 
