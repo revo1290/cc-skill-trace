@@ -29,6 +29,17 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: npm
 
+      # Requires repo secrets: GPG_PRIVATE_KEY (armored private key) and GPG_PASSPHRASE.
+      # The key must be registered with your GitHub account (Settings → SSH and GPG keys)
+      # so that tags signed by it show the "Verified" badge.
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+          git_user_signingkey: true
+          git_tag_gpgsign: true
+
       - name: Bump version in package.json
         run: npm version "${{ inputs.version }}" --no-git-tag-version
 
@@ -37,7 +48,7 @@ jobs:
       - run: npm run build
       - run: npm test
 
-      - name: Push version bump as release branch and open PR
+      - name: Push version bump as release branch, open PR, and enable auto-merge
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -47,33 +58,19 @@ jobs:
           git push origin "release/v${{ inputs.version }}"
           gh pr create \
             --title "chore: release v${{ inputs.version }}" \
-            --body "Automated version bump. Merge after confirming the npm publish succeeded." \
+            --body "Automated version bump. Auto-merges after CI passes." \
             --base main \
             --head "release/v${{ inputs.version }}"
+          gh pr merge --auto --merge "release/v${{ inputs.version }}"
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Create signed release tag via GitHub API
+      - name: Create GPG-signed release tag
         run: |
-          # Resolve the commit SHA the tag should point to (tip of release branch)
-          COMMIT_SHA=$(git rev-parse HEAD)
-          # Create an annotated tag object via the API.
-          # Tags created through the REST API with GITHUB_TOKEN are signed by GitHub
-          # and displayed as "Verified" on the repository.
-          TAG_SHA=$(gh api repos/${{ github.repository }}/git/tags \
-            --method POST \
-            --field tag="v${{ inputs.version }}" \
-            --field message="Release v${{ inputs.version }}" \
-            --field object="$COMMIT_SHA" \
-            --field type="commit" \
-            --jq '.sha')
-          # Create the lightweight ref pointing to the annotated tag object
-          gh api repos/${{ github.repository }}/git/refs \
-            --method POST \
-            --field ref="refs/tags/v${{ inputs.version }}" \
-            --field sha="$TAG_SHA"
-        env:
-          GH_TOKEN: ${{ github.token }}
+          git tag -s -a "v${{ inputs.version }}" \
+            -m "Release v${{ inputs.version }}" \
+            "$(git rev-parse HEAD)"
+          git push origin "v${{ inputs.version }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
