@@ -1,6 +1,6 @@
 {
   "name": "cc-skill-trace",
-  "version": "0.11.0",
+  "version": "0.10.0",
   "description": "Skill invocation debugger and visualizer for Claude Code — see which skills fired, when, and why",
   "keywords": [
     "claude-code",
