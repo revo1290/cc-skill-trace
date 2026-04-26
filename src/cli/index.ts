@@ -1,4 +1,15 @@
 #!/usr/bin/env node
+
+// Node.js version gate — Intl.Segmenter requires Node 16+, fetch/structuredClone require 18+ (#39)
+const _nodeMajor = parseInt(process.versions.node.split(".")[0]!, 10);
+if (_nodeMajor < 18) {
+  process.stderr.write(
+    `\ncc-skill-trace requires Node.js ≥ 18. You are running ${process.version}.\n` +
+    `Upgrade at https://nodejs.org\n\n`
+  );
+  process.exit(1);
+}
+
 import { program } from "commander";
 import chalk from "chalk";
 import { readFile, writeFile, rename, copyFile as fsCopyFile } from "node:fs/promises";
@@ -51,6 +62,20 @@ async function writeSettingsAtomic(path: string, data: unknown): Promise<void> {
 function scanProgress(done: number, total: number): void {
   process.stderr.write(chalk.gray(`\r  Scanning ${done}/${total} files…`));
   if (done === total) process.stderr.write("\n");
+}
+
+/** Scan session logs and merge new events into the store. Returns all scanned events + import count. (#30) */
+async function scanAndMerge(opts: {
+  since?: string;
+  sessionId?: string;
+}): Promise<{ events: Awaited<ReturnType<typeof readEvents>>; imported: number }> {
+  const events = await extractAllInvocations({ ...opts, onProgress: scanProgress });
+  const existingIds = new Set((await readEvents()).map((e) => e.id));
+  let imported = 0;
+  for (const ev of events) {
+    if (!existingIds.has(ev.id)) { await appendEvent(ev); imported++; }
+  }
+  return { events, imported };
 }
 
 function parseDuration(value: string): Date {
@@ -175,12 +200,7 @@ program
   .option("--follow", "Refresh dashboard every 2s (live tail)")
   .action(async (opts) => {
     if (opts.scan) {
-      const scanned = await extractAllInvocations({ since: opts.since, onProgress: scanProgress });
-      const existingIds = new Set((await readEvents()).map((e) => e.id));
-      let imported = 0;
-      for (const ev of scanned) {
-        if (!existingIds.has(ev.id)) { await appendEvent(ev); imported++; }
-      }
+      const { events: scanned, imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
       process.stderr.write(chalk.gray(`  Imported ${imported} new invocations (${scanned.length - imported} already stored).\n\n`));
     }
 
@@ -227,18 +247,19 @@ program
   .command("scan")
   .description("Retroactively scan Claude Code session logs (backfill)")
   .option("--since <date>", "Only sessions newer than this date", validateSince)
+  .option("--before <date>", "Filter up to this ISO date", validateSince)
+  .option("--skill <name>", "Filter by skill name")
+  .option("--session <id>", "Filter by session ID")
   .option("--clear", "Clear existing events before scanning")
   .action(async (opts) => {
     if (opts.clear) { await clearEvents(); console.log(chalk.gray("  Cleared.")); }
-    const events = await extractAllInvocations({ since: opts.since, onProgress: scanProgress });
-    if (events.length === 0) { console.log(chalk.yellow("  No invocations found.")); return; }
-    const existingIds = new Set((await readEvents()).map((e) => e.id));
-    let imported = 0;
-    for (const ev of events) {
-      if (!existingIds.has(ev.id)) { await appendEvent(ev); imported++; }
-    }
+    const { events, imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
+    let filtered = events;
+    if (opts.before) filtered = filtered.filter(e => e.timestamp <= opts.before);
+    if (opts.skill)  filtered = filtered.filter(e => e.skillName === opts.skill);
+    if (filtered.length === 0) { console.log(chalk.yellow("  No invocations found.")); return; }
     console.log(chalk.green(`✓  Imported ${imported} new invocations (${events.length - imported} already stored).`));
-    console.log("\n" + renderDashboard(events));
+    console.log("\n" + renderDashboard(filtered));
   });
 
 // ─── report (browser HTML) ────────────────────────────────────────────────────
@@ -250,21 +271,18 @@ program
   .option("--since <date>", "Filter from date", validateSince)
   .option("--before <date>", "Filter up to date", validateSince)
   .option("--skill <name>", "Filter by skill name")
+  .option("--session <id>", "Filter by session ID")
   .option("--scan", "Scan session logs first")
   .action(async (opts) => {
     if (opts.scan) {
-      const evs = await extractAllInvocations({ since: opts.since, onProgress: scanProgress });
-      const existingIds = new Set((await readEvents()).map((e) => e.id));
-      let imported = 0;
-      for (const ev of evs) {
-        if (!existingIds.has(ev.id)) { await appendEvent(ev); imported++; }
-      }
-      console.log(chalk.gray(`  Scanned: ${evs.length} invocations (${imported} new).`));
+      const { events: scanned, imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
+      console.log(chalk.gray(`  Scanned: ${scanned.length} invocations (${imported} new).`));
     }
     let events = await readEvents();
-    if (opts.since)  events = events.filter(e => e.timestamp >= opts.since);
-    if (opts.before) events = events.filter(e => e.timestamp <= opts.before);
-    if (opts.skill)  events = events.filter(e => e.skillName === opts.skill);
+    if (opts.since)   events = events.filter(e => e.timestamp >= opts.since);
+    if (opts.before)  events = events.filter(e => e.timestamp <= opts.before);
+    if (opts.skill)   events = events.filter(e => e.skillName === opts.skill);
+    if (opts.session) events = events.filter(e => e.sessionId === opts.session);
 
     const html = buildHtmlReport(events);
     await writeFile(opts.output, html, "utf-8");
@@ -306,21 +324,18 @@ program
   .option("--since <date>", "Filter from this ISO date", validateSince)
   .option("--before <date>", "Filter up to this ISO date", validateSince)
   .option("--skill <name>", "Filter by skill name")
+  .option("--session <id>", "Filter by session ID")
   .option("--scan", "Scan session logs first")
   .action(async (opts) => {
     if (opts.scan) {
-      const scanned = await extractAllInvocations({ since: opts.since, onProgress: scanProgress });
-      const existingIds = new Set((await readEvents()).map((e) => e.id));
-      let imported = 0;
-      for (const ev of scanned) {
-        if (!existingIds.has(ev.id)) { await appendEvent(ev); imported++; }
-      }
+      const { imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
       process.stderr.write(chalk.gray(`  Imported ${imported} new invocations.\n\n`));
     }
     let events = await readEvents();
-    if (opts.since)  events = events.filter(e => e.timestamp >= opts.since);
-    if (opts.before) events = events.filter(e => e.timestamp <= opts.before);
-    if (opts.skill)  events = events.filter(e => e.skillName === opts.skill);
+    if (opts.since)   events = events.filter(e => e.timestamp >= opts.since);
+    if (opts.before)  events = events.filter(e => e.timestamp <= opts.before);
+    if (opts.skill)   events = events.filter(e => e.skillName === opts.skill);
+    if (opts.session) events = events.filter(e => e.sessionId === opts.session);
     console.log(renderStats(events));
   });
 
@@ -333,11 +348,18 @@ program
   .option("--since <date>", "Filter from this ISO date", validateSince)
   .option("--before <date>", "Filter up to this ISO date", validateSince)
   .option("--skill <name>", "Filter by skill name")
+  .option("--session <id>", "Filter by session ID")
+  .option("--scan", "Scan session logs first")
   .action(async (opts) => {
+    if (opts.scan) {
+      const { imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
+      process.stderr.write(chalk.gray(`  Imported ${imported} new invocations.\n\n`));
+    }
     let events = await readEvents();
-    if (opts.since)  events = events.filter(e => e.timestamp >= opts.since);
-    if (opts.before) events = events.filter(e => e.timestamp <= opts.before);
-    if (opts.skill)  events = events.filter(e => e.skillName === opts.skill);
+    if (opts.since)   events = events.filter(e => e.timestamp >= opts.since);
+    if (opts.before)  events = events.filter(e => e.timestamp <= opts.before);
+    if (opts.skill)   events = events.filter(e => e.skillName === opts.skill);
+    if (opts.session) events = events.filter(e => e.sessionId === opts.session);
 
     const fmt = String(opts.format).toLowerCase();
     let out: string;

@@ -128,4 +128,34 @@ describe("extractInvocationsFromFile", () => {
     assert.equal(events.length, 1);
     assert.ok((events[0].triggerMessage?.length ?? 0) <= 300);
   });
+
+  it("populates injectedTokens from the following tool_result content (#34)", async () => {
+    const file = join(dir, "injected-tokens.jsonl");
+    const skillContent = "# My Skill\n" + "word ".repeat(80); // ~400 chars → ~100 tokens
+    await writeFile(file, jsonl([
+      userMsg("use my skill"),
+      {
+        type: "message",
+        timestamp: "2026-01-01T00:00:01.000Z",
+        sessionId: "sess-1",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tu-tok", name: "Skill", input: { skill: "my-skill" } }],
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-01-01T00:00:02.000Z",
+        sessionId: "sess-1",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tu-tok", content: skillContent }],
+        },
+      },
+    ]));
+    const events = await extractInvocationsFromFile(file);
+    assert.equal(events.length, 1);
+    assert.ok(events[0].injectedTokens != null, "injectedTokens should be populated");
+    assert.ok((events[0].injectedTokens ?? 0) > 0, "injectedTokens should be positive");
+  });
 });

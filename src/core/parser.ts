@@ -3,10 +3,12 @@ import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, basename } from "node:path";
 import { createInterface } from "node:readline";
-import type { SessionLogEntry, SkillInvocationEvent, ToolUse, ContentBlock } from "./types.js";
+import type { SessionLogEntry, SkillInvocationEvent, ToolUse, ToolResult, ContentBlock } from "./types.js";
 
-const CLAUDE_PROJECTS_DIR =
-  process.env["CC_PROJECTS_DIR"] ?? join(homedir(), ".claude", "projects");
+// Read at call time so tests and CLI can override via CC_PROJECTS_DIR at runtime (#38)
+function getProjectsDir(): string {
+  return process.env["CC_PROJECTS_DIR"] ?? join(homedir(), ".claude", "projects");
+}
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -53,12 +55,12 @@ async function findAllSessionFiles(): Promise<string[]> {
   const files: string[] = [];
   let projectDirs: string[];
   try {
-    projectDirs = await readdir(CLAUDE_PROJECTS_DIR);
+    projectDirs = await readdir(getProjectsDir());
   } catch {
     return files;
   }
   for (const projectDir of projectDirs) {
-    const projectPath = join(CLAUDE_PROJECTS_DIR, projectDir);
+    const projectPath = join(getProjectsDir(), projectDir);
     try {
       const s = await stat(projectPath);
       if (!s.isDirectory()) continue;
@@ -128,10 +130,6 @@ export async function extractInvocationsFromFile(
       const skillArgs = call.input.args ? String(call.input.args) : undefined;
 
       // Detect user-invoked vs Claude auto-invoked.
-      // A slash command typed by the user looks like "/<skillName>" or "/<plugin>:<skillName>"
-      // optionally followed by a space (for args) or end of string.
-      // We match both the full qualified name (plugin:skill) and the bare skill name so that
-      // "/pdf" matches skill "example-skills:pdf" as well as "pdf".
       const bareSkillName = skillName.includes(":") ? skillName.split(":").pop()! : skillName;
       const slashCmdRe = new RegExp(
         `^/(${escapeRegExp(skillName)}|${escapeRegExp(bareSkillName)})(\\s|$)`,
@@ -139,9 +137,31 @@ export async function extractInvocationsFromFile(
       );
       const isUserInvoked = slashCmdRe.test(triggerMessage?.trimStart() ?? "");
 
+      // Estimate injectedTokens from the tool_result that follows this call (#34).
+      // The next user message should contain a tool_result block with matching tool_use_id.
+      let injectedTokens: number | undefined;
+      for (let j = i + 1; j < Math.min(i + 4, entries.length); j++) {
+        const next = entries[j];
+        if (!next.message) continue;
+        if (next.message.role !== "user") break;
+        const content = next.message.content;
+        if (typeof content === "string") break;
+        const result = (content as ContentBlock[]).find(
+          (b): b is ToolResult => b.type === "tool_result" && b.tool_use_id === call.id
+        );
+        if (result) {
+          const text = typeof result.content === "string"
+            ? result.content
+            : (result.content as Array<{ type: string; text?: string }>)
+                .filter((b) => b.type === "text")
+                .map((b) => b.text ?? "")
+                .join("");
+          if (text) injectedTokens = Math.round(text.length / 4);
+          break;
+        }
+      }
+
       events.push({
-        // Use the tool_use block ID as event ID — it is globally unique per invocation
-        // and stable across repeated scans of the same session file.
         id: call.id,
         timestamp: entry.timestamp,
         sessionId: entry.sessionId ?? basename(filePath, ".jsonl"),
@@ -149,6 +169,7 @@ export async function extractInvocationsFromFile(
         skillArgs,
         source: isUserInvoked ? "user" : "claude",
         triggerMessage,
+        injectedTokens,
         cwd: undefined,
         gitBranch: undefined,
       });
