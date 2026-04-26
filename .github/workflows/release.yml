@@ -29,16 +29,17 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: npm
 
-      # Requires repo secrets: GPG_PRIVATE_KEY (armored private key) and GPG_PASSPHRASE.
-      # The key must be registered with your GitHub account (Settings → SSH and GPG keys)
-      # so that tags signed by it show the "Verified" badge.
-      - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
-        with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
-          git_user_signingkey: true
-          git_tag_gpgsign: true
+      # Requires repo secret: SSH_SIGNING_KEY (private key of id_ed25519_signing).
+      # The corresponding public key must be registered under
+      # GitHub Settings → SSH and GPG keys → Signing keys.
+      - name: Set up SSH signing key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_SIGNING_KEY }}" > ~/.ssh/signing_key
+          chmod 600 ~/.ssh/signing_key
+          git config gpg.format ssh
+          git config user.signingkey ~/.ssh/signing_key
+          git config tag.gpgsign true
 
       - name: Bump version in package.json
         run: npm version "${{ inputs.version }}" --no-git-tag-version
@@ -65,7 +66,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Create GPG-signed release tag
+      - name: Create SSH-signed release tag
         run: |
           git tag -s -a "v${{ inputs.version }}" \
             -m "Release v${{ inputs.version }}" \
