@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. 0.2.0) — must match package.json version on main'
+        description: 'Release version (e.g. 0.2.0)'
         required: true
         type: string
 
@@ -18,7 +18,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Check out the latest main — the tag is created by this workflow
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
@@ -29,25 +28,22 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: npm
 
-      - name: Verify package.json version matches input
-        run: |
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          if [ "$PKG_VERSION" != "${{ inputs.version }}" ]; then
-            echo "::error::package.json version ($PKG_VERSION) does not match input (${{ inputs.version }}). Update package.json first."
-            exit 1
-          fi
+      - name: Bump version in package.json
+        run: npm version "${{ inputs.version }}" --no-git-tag-version
 
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
 
-      - name: Create and push release tag
+      - name: Commit version bump, tag, and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore: release v${{ inputs.version }}"
           git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }}"
-          git push origin "v${{ inputs.version }}"
+          git push origin main "v${{ inputs.version }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
