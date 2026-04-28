@@ -106,16 +106,40 @@ program
   .description("Skill invocation debugger & visualizer for Claude Code")
   .version(VERSION);
 
+// ─── shared: resolve bundled SKILL.md path ────────────────────────────────────
+async function bundledSkillMdPath(): Promise<string> {
+  const { fileURLToPath } = await import("node:url");
+  const { dirname } = await import("node:path");
+  const here = dirname(fileURLToPath(import.meta.url));
+  return join(here, "..", "skill", "SKILL.md");
+}
+
+const installedSkillMdPath = join(homedir(), ".claude", "skills", "skill-trace", "SKILL.md");
+
+/** Returns true when the installed SKILL.md differs from the bundled one. */
+async function isSkillMdStale(): Promise<boolean> {
+  try {
+    const [installed, bundled] = await Promise.all([
+      readFile(installedSkillMdPath, "utf-8"),
+      readFile(await bundledSkillMdPath(), "utf-8"),
+    ]);
+    return installed !== bundled;
+  } catch {
+    return false;
+  }
+}
+
 // ─── install ──────────────────────────────────────────────────────────────────
 program
   .command("install")
-  .description("Register the capture hook in your Claude Code settings")
-  .option("--project", "Install into .claude/settings.json (project-level) instead of global")
+  .description("Register the capture hook and install/update the skill in Claude Code")
+  .option("--project", "Install hook into .claude/settings.json (project-level) instead of global")
   .action(async (opts) => {
     const settingsPath = opts.project
       ? resolve(".claude/settings.json")
       : join(homedir(), ".claude", "settings.json");
 
+    // ── 1. Hook registration (skip if already present) ──────────────────────
     let settings: Record<string, unknown> = {};
     try {
       settings = JSON.parse(await readFile(settingsPath, "utf-8"));
@@ -125,32 +149,36 @@ program
     const preToolUse = (hooks.PreToolUse ?? []) as Array<Record<string, unknown>>;
 
     if (preToolUse.some((h) => JSON.stringify(h).includes("cc-skill-trace"))) {
-      console.log(chalk.yellow("⚠  Hook already registered → " + settingsPath));
-      return;
+      console.log(chalk.gray("  Hook already registered → " + settingsPath));
+    } else {
+      preToolUse.push({
+        matcher: "Skill",
+        hooks: [{ type: "command", command: "cc-skill-trace hook-capture" }],
+      });
+      settings.hooks = { ...hooks, PreToolUse: preToolUse };
+      await writeSettingsAtomic(settingsPath, settings);
+      console.log(chalk.green("✓  Hook installed → " + settingsPath));
+      console.log(chalk.gray("  Restart Claude Code for the hook to take effect."));
     }
 
-    preToolUse.push({
-      matcher: "Skill",
-      hooks: [{ type: "command", command: "cc-skill-trace hook-capture" }],
-    });
-    settings.hooks = { ...hooks, PreToolUse: preToolUse };
-
-    await writeSettingsAtomic(settingsPath, settings);
-    console.log(chalk.green("✓  Hook installed → " + settingsPath));
-    console.log(chalk.gray("  Restart Claude Code for the hook to take effect."));
-
-    // Also install the skill
+    // ── 2. SKILL.md — always sync to the latest bundled version ─────────────
     const skillDir = join(homedir(), ".claude", "skills", "skill-trace");
     const { mkdir } = await import("node:fs/promises");
-    const { fileURLToPath } = await import("node:url");
-    const { dirname } = await import("node:path");
-    const here = dirname(fileURLToPath(import.meta.url));
-    const skillSrc = join(here, "..", "skill", "SKILL.md");
+    const skillSrc = await bundledSkillMdPath();
     try {
+      const bundled = await readFile(skillSrc, "utf-8");
+      const installed = await readFile(installedSkillMdPath, "utf-8").catch(() => null);
       await mkdir(skillDir, { recursive: true });
-      await fsCopyFile(skillSrc, join(skillDir, "SKILL.md"));
-      console.log(chalk.green("✓  Skill installed   → " + skillDir));
-      console.log(chalk.gray("  Use /skill-trace inside Claude Code to open the dashboard."));
+      await fsCopyFile(skillSrc, installedSkillMdPath);
+      if (installed === null) {
+        console.log(chalk.green("✓  Skill installed   → " + skillDir));
+        console.log(chalk.gray("  Use /skill-trace inside Claude Code to open the dashboard."));
+      } else if (installed !== bundled) {
+        console.log(chalk.green("✓  SKILL.md updated  → " + skillDir));
+        console.log(chalk.gray("  Restart Claude Code to apply the updated skill definition."));
+      } else {
+        console.log(chalk.gray("  SKILL.md already up to date."));
+      }
     } catch {
       console.log(chalk.yellow("  Skill file not found — run from the package root or install from npm."));
     }
@@ -233,6 +261,13 @@ program
   .option("--follow", "Refresh dashboard every 2s (live tail)")
   .action(async (opts) => {
     validateDateRange(opts.since, opts.before);
+
+    // Warn when the installed SKILL.md is out of date with the current package.
+    if (await isSkillMdStale()) {
+      process.stderr.write(
+        chalk.yellow("⚠  SKILL.md is outdated — run: cc-skill-trace install\n\n")
+      );
+    }
 
     if (opts.scan) {
       const { events: scanned, imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });

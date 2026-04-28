@@ -14,14 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CC_SCAN_CONCURRENCY` environment variable — tune the number of parallel file reads during scan (default: 8)
 - `validateDateRange` guard — `--since > --before` now exits with a clear error message instead of silently returning zero results
 - Terminal dashboard now shows `cwd` and `~N tokens` metadata inline when available
+- `show` now warns on stderr when the installed SKILL.md is out of date with the current package version: `⚠  SKILL.md is outdated — run: cc-skill-trace install`
 
 ### Fixed
 - `report`, `stats`, and `export` commands now pass filter options (`--since`, `--before`, `--skill`, `--session`) directly to `readEvents` instead of loading all events and filtering in memory — consistent with `show` and more efficient for large stores
 - CSV export now quotes header column names (was quoting values but not headers)
 - `export` CSV now includes the `injectedTokens` field (was missing from headers)
 - CLAUDE.md architecture section corrected: `hook-capture` is a hidden sub-command in `cli/index.ts`, not a standalone `src/hook/capture.ts` file
+- `install` no longer returns early when the hook is already registered — SKILL.md is now always synced to the latest bundled version regardless of hook state
 
 ### Changed
+- SKILL.md compressed from ~2,455 chars (≈614 tokens) to ~781 chars (≈195 tokens) — **68% reduction in per-invocation token cost**; output capped at 15 events with `-n 15` to prevent unbounded context growth
+- `install` now reports three distinct states for SKILL.md: "installed", "updated", or "already up to date"
 - `report` success message now includes the event count: `✓  Report → <path>  (N events)`
 - `hook-capture` debug output is now gated behind `CC_DEBUG=1` rather than always silent (stderr only, never blocks Claude Code)
 

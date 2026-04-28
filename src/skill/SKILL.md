@@ -8,28 +8,9 @@ description: >
 user-invocable: true
 ---
 
-# skill-trace
-
-## Step 1 — Check installation
-
 ```bash
-which cc-skill-trace 2>/dev/null || echo "NOT_INSTALLED"
+which cc-skill-trace 2>/dev/null || { echo "NOT INSTALLED — run: npm install -g cc-skill-trace && cc-skill-trace install"; exit 0; }
+cc-skill-trace show --scan --compact -n 15 2>&1
 ```
 
-If `NOT_INSTALLED`: tell the user to run `npm install -g cc-skill-trace && cc-skill-trace install` then restart Claude Code. Stop here.
-
-## Step 2 — Show dashboard
-
-```bash
-cc-skill-trace show --scan --compact 2>&1
-```
-
-Show the output verbatim in a fenced code block (no language tag).
-
-## Step 3 — Interpret
-
-Provide a 2–3 line summary covering:
-- Auto-trigger rate (if >80%, note it costs context tokens and skill descriptions may be too broad)
-- Any skill appearing auto-triggered without clear user intent (flag as candidate for narrowing its `description:`)
-
-Offer follow-ups: `cc-skill-trace report` for browser charts, `--skill <name>` to drill in, `--since <YYYY-MM-DD>` to filter by date.
+Show output verbatim in a code block. Then in 2 sentences: state the auto-trigger rate and flag any skill auto-fired without clear user intent (suggest narrowing its `description:`). Offer: `report` for charts, `--skill <name>`, `--since YYYY-MM-DD`.
