@@ -1,0 +1,30 @@
+name: Question / Help
+description: Ask a question about usage or behavior
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For general questions, [GitHub Discussions](https://github.com/revo1290/cc-skill-trace/discussions) is often faster. But feel free to ask here too.
+
+  - type: input
+    id: version
+    attributes:
+      label: cc-skill-trace version
+      placeholder: "e.g. 0.11.0  (run: cc-skill-trace --version)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: What would you like to know?
+      description: Be as specific as possible — include the command you ran and what you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you already tried?
+      description: Helps avoid repeating suggestions you've already seen.

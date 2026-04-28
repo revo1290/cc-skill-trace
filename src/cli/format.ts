@@ -277,7 +277,12 @@ export function renderDashboard(events: SkillInvocationEvent[]): string {
       ? chalk.italic.gray(`"${ev.triggerMessage.replace(/\n/g, " ").slice(0, maxTriggerW)}"`)
       : chalk.gray("(no trigger context)");
 
-    lines.push(`  ${dot} ${time}  ${name}  ${src}  ${trigger}`);
+    const meta: string[] = [];
+    if (ev.cwd)            meta.push(chalk.gray(`  cwd: ${ev.cwd}`));
+    if (ev.injectedTokens) meta.push(chalk.gray(`  ~${ev.injectedTokens.toLocaleString()} tokens`));
+    const metaLine = meta.length ? "\n       " + meta.join("  ") : "";
+
+    lines.push(`  ${dot} ${time}  ${name}  ${src}  ${trigger}${metaLine}`);
   }
 
   lines.push("");

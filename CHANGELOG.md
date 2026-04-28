@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `list-skills` command (alias: `ls`) — list all unique skills with auto/user counts; supports `--json`, `--since`, `--before`, `--scan`
+- `show --json` flag — output events as a JSON array for scripting/piping
+- `CC_DEBUG=1` environment variable — enable debug logging in `hook-capture` (written to stderr)
+- `CC_SCAN_CONCURRENCY` environment variable — tune the number of parallel file reads during scan (default: 8)
+- `validateDateRange` guard — `--since > --before` now exits with a clear error message instead of silently returning zero results
+- Terminal dashboard now shows `cwd` and `~N tokens` metadata inline when available
+
+### Fixed
+- `report`, `stats`, and `export` commands now pass filter options (`--since`, `--before`, `--skill`, `--session`) directly to `readEvents` instead of loading all events and filtering in memory — consistent with `show` and more efficient for large stores
+- CSV export now quotes header column names (was quoting values but not headers)
+- `export` CSV now includes the `injectedTokens` field (was missing from headers)
+- CLAUDE.md architecture section corrected: `hook-capture` is a hidden sub-command in `cli/index.ts`, not a standalone `src/hook/capture.ts` file
+
+### Changed
+- `report` success message now includes the event count: `✓  Report → <path>  (N events)`
+- `hook-capture` debug output is now gated behind `CC_DEBUG=1` rather than always silent (stderr only, never blocks Claude Code)
+
 ## [0.1.9] — 2026-04-22
 
 ### Fixed

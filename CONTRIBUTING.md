@@ -1,6 +1,7 @@
 # Contributing to cc-skill-trace
 
-Thank you for your interest in contributing!
+Thank you for your interest in contributing!  
+Please read our [Code of Conduct](./CODE_OF_CONDUCT.md) before participating. For questions, see [SUPPORT.md](./SUPPORT.md).
 
 ## Getting started
 
