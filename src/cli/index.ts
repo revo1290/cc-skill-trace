@@ -20,7 +20,7 @@ import { createRequire } from "node:module";
 import { readEvents, clearEvents, appendEvent, pruneEvents } from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
-import { renderDashboard, renderCompact, renderStats } from "./format.js";
+import { renderDashboard, renderCompact, renderTerse, renderStats, buildStats } from "./format.js";
 
 const _require = createRequire(import.meta.url);
 const VERSION = (_require("../../package.json") as { version: string }).version;
@@ -42,6 +42,14 @@ function validateLimit(value: string): string {
     process.exit(1);
   }
   return value;
+}
+
+/** Fail fast if --since is later than --before. */
+function validateDateRange(since: string | undefined, before: string | undefined): void {
+  if (since && before && since > before) {
+    console.error(chalk.red(`✗  --since (${since}) must be earlier than --before (${before})`));
+    process.exit(1);
+  }
 }
 
 /**
@@ -98,16 +106,40 @@ program
   .description("Skill invocation debugger & visualizer for Claude Code")
   .version(VERSION);
 
+// ─── shared: resolve bundled SKILL.md path ────────────────────────────────────
+async function bundledSkillMdPath(): Promise<string> {
+  const { fileURLToPath } = await import("node:url");
+  const { dirname } = await import("node:path");
+  const here = dirname(fileURLToPath(import.meta.url));
+  return join(here, "..", "skill", "SKILL.md");
+}
+
+const installedSkillMdPath = join(homedir(), ".claude", "skills", "skill-trace", "SKILL.md");
+
+/** Returns true when the installed SKILL.md differs from the bundled one. */
+async function isSkillMdStale(): Promise<boolean> {
+  try {
+    const [installed, bundled] = await Promise.all([
+      readFile(installedSkillMdPath, "utf-8"),
+      readFile(await bundledSkillMdPath(), "utf-8"),
+    ]);
+    return installed !== bundled;
+  } catch {
+    return false;
+  }
+}
+
 // ─── install ──────────────────────────────────────────────────────────────────
 program
   .command("install")
-  .description("Register the capture hook in your Claude Code settings")
-  .option("--project", "Install into .claude/settings.json (project-level) instead of global")
+  .description("Register the capture hook and install/update the skill in Claude Code")
+  .option("--project", "Install hook into .claude/settings.json (project-level) instead of global")
   .action(async (opts) => {
     const settingsPath = opts.project
       ? resolve(".claude/settings.json")
       : join(homedir(), ".claude", "settings.json");
 
+    // ── 1. Hook registration (skip if already present) ──────────────────────
     let settings: Record<string, unknown> = {};
     try {
       settings = JSON.parse(await readFile(settingsPath, "utf-8"));
@@ -117,32 +149,36 @@ program
     const preToolUse = (hooks.PreToolUse ?? []) as Array<Record<string, unknown>>;
 
     if (preToolUse.some((h) => JSON.stringify(h).includes("cc-skill-trace"))) {
-      console.log(chalk.yellow("⚠  Hook already registered → " + settingsPath));
-      return;
+      console.log(chalk.gray("  Hook already registered → " + settingsPath));
+    } else {
+      preToolUse.push({
+        matcher: "Skill",
+        hooks: [{ type: "command", command: "cc-skill-trace hook-capture" }],
+      });
+      settings.hooks = { ...hooks, PreToolUse: preToolUse };
+      await writeSettingsAtomic(settingsPath, settings);
+      console.log(chalk.green("✓  Hook installed → " + settingsPath));
+      console.log(chalk.gray("  Restart Claude Code for the hook to take effect."));
     }
 
-    preToolUse.push({
-      matcher: "Skill",
-      hooks: [{ type: "command", command: "cc-skill-trace hook-capture" }],
-    });
-    settings.hooks = { ...hooks, PreToolUse: preToolUse };
-
-    await writeSettingsAtomic(settingsPath, settings);
-    console.log(chalk.green("✓  Hook installed → " + settingsPath));
-    console.log(chalk.gray("  Restart Claude Code for the hook to take effect."));
-
-    // Also install the skill
+    // ── 2. SKILL.md — always sync to the latest bundled version ─────────────
     const skillDir = join(homedir(), ".claude", "skills", "skill-trace");
     const { mkdir } = await import("node:fs/promises");
-    const { fileURLToPath } = await import("node:url");
-    const { dirname } = await import("node:path");
-    const here = dirname(fileURLToPath(import.meta.url));
-    const skillSrc = join(here, "..", "skill", "SKILL.md");
+    const skillSrc = await bundledSkillMdPath();
     try {
+      const bundled = await readFile(skillSrc, "utf-8");
+      const installed = await readFile(installedSkillMdPath, "utf-8").catch(() => null);
       await mkdir(skillDir, { recursive: true });
-      await fsCopyFile(skillSrc, join(skillDir, "SKILL.md"));
-      console.log(chalk.green("✓  Skill installed   → " + skillDir));
-      console.log(chalk.gray("  Use /skill-trace inside Claude Code to open the dashboard."));
+      await fsCopyFile(skillSrc, installedSkillMdPath);
+      if (installed === null) {
+        console.log(chalk.green("✓  Skill installed   → " + skillDir));
+        console.log(chalk.gray("  Use /skill-trace inside Claude Code to open the dashboard."));
+      } else if (installed !== bundled) {
+        console.log(chalk.green("✓  SKILL.md updated  → " + skillDir));
+        console.log(chalk.gray("  Restart Claude Code to apply the updated skill definition."));
+      } else {
+        console.log(chalk.gray("  SKILL.md already up to date."));
+      }
     } catch {
       console.log(chalk.yellow("  Skill file not found — run from the package root or install from npm."));
     }
@@ -154,20 +190,43 @@ program
   .description("Internal: receives PreToolUse hook payload via stdin")
   .helpOption(false)
   .action(async () => {
+    const DEBUG = process.env["CC_DEBUG"] === "1";
+    const dbg = (msg: string) => { if (DEBUG) process.stderr.write(`[cc-skill-trace] ${msg}\n`); };
+
     let raw = "";
     const MAX_STDIN_BYTES = 1024 * 64; // 64 KB — hook payloads are tiny
     for await (const chunk of process.stdin) {
       raw += chunk;
-      if (Buffer.byteLength(raw) > MAX_STDIN_BYTES) { process.exit(0); }
+      if (Buffer.byteLength(raw) > MAX_STDIN_BYTES) {
+        dbg("stdin exceeded 64 KB limit, ignoring");
+        process.exit(0);
+      }
     }
 
-    let payload: { session_id?: string; tool_name?: string; tool_input?: { skill?: string; args?: string }; user_invoked?: boolean; cwd?: string; git_branch?: string };
+    let payload: {
+      session_id?: string;
+      tool_name?: string;
+      tool_input?: { skill?: string; args?: string };
+      user_invoked?: boolean;
+      cwd?: string;
+      git_branch?: string;
+    };
     try {
       const parsed: unknown = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object") { process.exit(0); }
+      if (!parsed || typeof parsed !== "object") {
+        dbg("payload is not an object, ignoring");
+        process.exit(0);
+      }
       payload = parsed as typeof payload;
-    } catch { process.exit(0); }
-    if (payload.tool_name !== "Skill" || !payload.tool_input?.skill) { process.exit(0); }
+    } catch (err) {
+      dbg(`JSON parse error: ${err}`);
+      process.exit(0);
+    }
+
+    if (payload.tool_name !== "Skill" || !payload.tool_input?.skill) {
+      dbg(`not a Skill invocation (tool_name=${payload.tool_name}), ignoring`);
+      process.exit(0);
+    }
 
     const { randomUUID } = await import("node:crypto");
     const event = {
@@ -181,7 +240,8 @@ program
       gitBranch: payload.git_branch,
     };
 
-    try { await appendEvent(event); } catch { /* never block Claude Code */ }
+    dbg(`capturing ${event.source} invocation of "${event.skillName}" in session ${event.sessionId}`);
+    try { await appendEvent(event); dbg("event appended"); } catch (err) { dbg(`appendEvent failed: ${err}`); }
     process.stdout.write(JSON.stringify({}));
     process.exit(0);
   });
@@ -196,9 +256,20 @@ program
   .option("--skill <name>", "Filter by skill name")
   .option("--session <id>", "Filter by session ID")
   .option("--compact", "Compact table instead of dashboard")
+  .option("--terse", "Ultra-compact no-ANSI output (used by /skill-trace to minimise token cost)")
+  .option("--json", "Output events as JSON array (pipe-friendly)")
   .option("--scan", "Scan session logs before showing (backfill)")
   .option("--follow", "Refresh dashboard every 2s (live tail)")
   .action(async (opts) => {
+    validateDateRange(opts.since, opts.before);
+
+    // Warn when the installed SKILL.md is out of date with the current package.
+    if (await isSkillMdStale()) {
+      process.stderr.write(
+        chalk.yellow("⚠  SKILL.md is outdated — run: cc-skill-trace install\n\n")
+      );
+    }
+
     if (opts.scan) {
       const { events: scanned, imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
       process.stderr.write(chalk.gray(`  Imported ${imported} new invocations (${scanned.length - imported} already stored).\n\n`));
@@ -233,7 +304,12 @@ program
     }
 
     const events = await readEvents(readOpts);
-    if (opts.compact) {
+
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(events, null, 2) + "\n");
+    } else if (opts.terse) {
+      process.stdout.write(renderTerse(events) + "\n");
+    } else if (opts.compact) {
       console.log(renderCompact(events));
     } else {
       console.log(renderDashboard(events));
@@ -250,6 +326,7 @@ program
   .option("--session <id>", "Filter by session ID")
   .option("--clear", "Clear existing events before scanning")
   .action(async (opts) => {
+    validateDateRange(opts.since, opts.before);
     if (opts.clear) { await clearEvents(); console.log(chalk.gray("  Cleared.")); }
     const { events, imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
     let filtered = events;
@@ -272,19 +349,21 @@ program
   .option("--session <id>", "Filter by session ID")
   .option("--scan", "Scan session logs first")
   .action(async (opts) => {
+    validateDateRange(opts.since, opts.before);
     if (opts.scan) {
       const { events: scanned, imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
       console.log(chalk.gray(`  Scanned: ${scanned.length} invocations (${imported} new).`));
     }
-    let events = await readEvents();
-    if (opts.since)   events = events.filter(e => e.timestamp >= opts.since);
-    if (opts.before)  events = events.filter(e => e.timestamp <= opts.before);
-    if (opts.skill)   events = events.filter(e => e.skillName === opts.skill);
-    if (opts.session) events = events.filter(e => e.sessionId === opts.session);
+    const events = await readEvents({
+      since: opts.since as string | undefined,
+      before: opts.before as string | undefined,
+      skill: opts.skill as string | undefined,
+      sessionId: opts.session as string | undefined,
+    });
 
     const html = buildHtmlReport(events);
     await writeFile(opts.output, html, "utf-8");
-    console.log(chalk.green(`✓  Report → ${opts.output}`));
+    console.log(chalk.green(`✓  Report → ${opts.output}  (${events.length} events)`));
 
     if (opts.open !== false) {
       try {
@@ -295,7 +374,7 @@ program
         } else {
           execFileSync("xdg-open", [opts.output], { stdio: "ignore" });
         }
-      } catch { console.log(chalk.gray(`  Open: ${opts.output}`)); }
+      } catch { console.log(chalk.gray(`  Open manually: ${opts.output}`)); }
     }
   });
 
@@ -325,15 +404,17 @@ program
   .option("--session <id>", "Filter by session ID")
   .option("--scan", "Scan session logs first")
   .action(async (opts) => {
+    validateDateRange(opts.since, opts.before);
     if (opts.scan) {
       const { imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
       process.stderr.write(chalk.gray(`  Imported ${imported} new invocations.\n\n`));
     }
-    let events = await readEvents();
-    if (opts.since)   events = events.filter(e => e.timestamp >= opts.since);
-    if (opts.before)  events = events.filter(e => e.timestamp <= opts.before);
-    if (opts.skill)   events = events.filter(e => e.skillName === opts.skill);
-    if (opts.session) events = events.filter(e => e.sessionId === opts.session);
+    const events = await readEvents({
+      since: opts.since as string | undefined,
+      before: opts.before as string | undefined,
+      skill: opts.skill as string | undefined,
+      sessionId: opts.session as string | undefined,
+    });
     console.log(renderStats(events));
   });
 
@@ -349,15 +430,17 @@ program
   .option("--session <id>", "Filter by session ID")
   .option("--scan", "Scan session logs first")
   .action(async (opts) => {
+    validateDateRange(opts.since, opts.before);
     if (opts.scan) {
       const { imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
       process.stderr.write(chalk.gray(`  Imported ${imported} new invocations.\n\n`));
     }
-    let events = await readEvents();
-    if (opts.since)   events = events.filter(e => e.timestamp >= opts.since);
-    if (opts.before)  events = events.filter(e => e.timestamp <= opts.before);
-    if (opts.skill)   events = events.filter(e => e.skillName === opts.skill);
-    if (opts.session) events = events.filter(e => e.sessionId === opts.session);
+    const events = await readEvents({
+      since: opts.since as string | undefined,
+      before: opts.before as string | undefined,
+      skill: opts.skill as string | undefined,
+      sessionId: opts.session as string | undefined,
+    });
 
     const fmt = String(opts.format).toLowerCase();
     let out: string;
@@ -365,7 +448,7 @@ program
     if (fmt === "csv") {
       const headers: (keyof typeof events[0])[] = [
         "id", "timestamp", "sessionId", "skillName", "skillArgs",
-        "source", "triggerMessage", "cwd", "gitBranch",
+        "source", "triggerMessage", "injectedTokens", "cwd", "gitBranch",
       ];
       const esc = (v: unknown) => {
         const s = v == null ? "" : String(v);
@@ -373,7 +456,8 @@ program
           ? `"${s.replace(/"/g, '""')}"` : s;
       };
       // UTF-8 BOM ensures Excel opens the file without garbling non-ASCII characters
-      out = "\uFEFF" + headers.join(",") + "\n" + events.map(e => headers.map(h => esc(e[h])).join(",")).join("\n");
+      out = "\uFEFF" + headers.map(h => `"${h}"`).join(",") + "\n"
+        + events.map(e => headers.map(h => esc(e[h])).join(",")).join("\n");
     } else if (fmt === "json") {
       out = JSON.stringify(events, null, 2);
     } else {
@@ -386,6 +470,54 @@ program
       console.error(chalk.green(`✓  Exported ${events.length} events → ${opts.output}`));
     } else {
       process.stdout.write(out + "\n");
+    }
+  });
+
+// ─── list-skills ──────────────────────────────────────────────────────────────
+program
+  .command("list-skills")
+  .alias("ls")
+  .description("List all unique skills seen, with invocation counts")
+  .option("--since <date>", "Filter from this ISO date", validateSince)
+  .option("--before <date>", "Filter up to this ISO date", validateSince)
+  .option("--scan", "Scan session logs first")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    validateDateRange(opts.since, opts.before);
+    if (opts.scan) {
+      const { imported } = await scanAndMerge({ since: opts.since });
+      process.stderr.write(chalk.gray(`  Imported ${imported} new invocations.\n\n`));
+    }
+    const events = await readEvents({
+      since: opts.since as string | undefined,
+      before: opts.before as string | undefined,
+    });
+
+    const stats = buildStats(events);
+
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(stats, null, 2) + "\n");
+      return;
+    }
+
+    if (stats.length === 0) {
+      console.log(chalk.gray("  No skills recorded yet."));
+      console.log(chalk.gray("  Run: cc-skill-trace install  then use Claude Code."));
+      return;
+    }
+
+    const maxName = Math.max(...stats.map(s => s.name.length));
+    console.log(
+      chalk.gray("  " + "skill".padEnd(maxName) + "   total  auto  user")
+    );
+    console.log(chalk.gray("  " + "─".repeat(maxName + 20)));
+    for (const s of stats) {
+      console.log(
+        "  " + chalk.bold.yellow(s.name.padEnd(maxName)) +
+        "  " + chalk.white(String(s.total).padStart(5)) + chalk.gray("x") +
+        "  " + chalk.magenta(String(s.auto).padStart(4)) +
+        "  " + chalk.cyan(String(s.byUser).padStart(4))
+      );
     }
   });
 

@@ -194,7 +194,8 @@ export async function extractAllInvocations(opts: {
   const allEvents: SkillInvocationEvent[] = [];
   let done = 0;
 
-  await mapWithLimit(files, 8, async (file) => {
+  const concurrency = Math.max(1, parseInt(process.env["CC_SCAN_CONCURRENCY"] ?? "8", 10) || 8);
+  await mapWithLimit(files, concurrency, async (file) => {
     try {
       const events = await extractInvocationsFromFile(file);
       for (const ev of events) {

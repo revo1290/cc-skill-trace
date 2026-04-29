@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Question / Discussion
+    url: https://github.com/revo1290/cc-skill-trace/discussions
+    about: General questions and community discussion
   - name: Security vulnerability
     url: https://github.com/revo1290/cc-skill-trace/blob/main/SECURITY.md
     about: Do not file public issues for security vulnerabilities — see SECURITY.md

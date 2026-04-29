@@ -4,6 +4,7 @@
 
 See which Claude Code skills fired, when, and why — in your terminal or in an interactive browser dashboard.
 
+[![CI](https://github.com/revo1290/cc-skill-trace/actions/workflows/ci.yml/badge.svg)](https://github.com/revo1290/cc-skill-trace/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/cc-skill-trace)](https://www.npmjs.com/package/cc-skill-trace)
 [![npm downloads](https://img.shields.io/npm/dm/cc-skill-trace)](https://www.npmjs.com/package/cc-skill-trace)
 [![Node.js](https://img.shields.io/node/v/cc-skill-trace)](https://nodejs.org)
@@ -105,12 +106,26 @@ cc-skill-trace show --scan
 # Compact one-line list
 cc-skill-trace show --compact
 
+# JSON output (pipe-friendly for scripting)
+cc-skill-trace show --json
+
 # Filter options
 cc-skill-trace show --skill commit
 cc-skill-trace show --since 2026-04-01
 cc-skill-trace show --since 2026-04-01 --before 2026-04-30
 cc-skill-trace show --session <session-id>
 cc-skill-trace show -n 100          # show last 100 events (default: 50)
+```
+
+### Skill Discovery
+
+```bash
+# List all unique skills with auto/user counts
+cc-skill-trace list-skills       # or: cc-skill-trace ls
+
+# Filter by date or backfill first
+cc-skill-trace ls --since 2026-04-01
+cc-skill-trace ls --scan --json  # machine-readable
 ```
 
 ### Statistics
@@ -211,20 +226,26 @@ cc-skill-trace uninstall --project
 Every time a skill is invoked, `hook-capture` fires and appends an event to `~/.cc-skill-trace/events.jsonl`.
 It always returns `{}` and **never blocks Claude Code**.
 
+> **Note:** Real-time events captured by `hook-capture` do not include `triggerMessage` (the preceding user message). Run `cc-skill-trace scan` to backfill trigger messages from session logs.
+
 ### 2. Retroactive scan
 
 `~/.claude/projects/**/*.jsonl` session logs are parsed to extract past skill invocations, including the user message that preceded each one (the "trigger").
-
-Set `CC_PROJECTS_DIR` to override the default scan path:
-
-```bash
-CC_PROJECTS_DIR=/custom/path cc-skill-trace scan
-```
 
 ### 3. Claude Code skill (`/skill-trace`)
 
 Installing `~/.claude/skills/skill-trace/SKILL.md` lets you call `/skill-trace` from the Claude Code chat.
 Claude runs the dashboard and interprets the results — explaining why an auto-trigger rate is high, which skills fire unexpectedly, and how to narrow skill descriptions.
+
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `CC_PROJECTS_DIR` | `~/.claude/projects` | Override the scan directory for session logs |
+| `CC_DEBUG` | _(unset)_ | Set to `1` to enable debug logging in `hook-capture` (written to stderr) |
+| `CC_SCAN_CONCURRENCY` | `8` | Number of session files to read in parallel during scan |
 
 ---
 
@@ -297,14 +318,11 @@ interface SkillInvocationEvent {
 
 ## Releasing a new version
 
-Releases are automated via GitHub Actions. To publish:
+Releases are fully automated via GitHub Actions (`release.yml`).
 
-```bash
-npm version patch   # or minor / major
-git push origin main --follow-tags
-```
-
-The `release.yml` workflow triggers on `v*.*.*` tags, runs the full test suite, creates a GitHub Release, and publishes to npm automatically.
+1. Go to **Actions → Release → Run workflow** on GitHub.
+2. Enter the new version number (e.g. `0.12.0`).
+3. The workflow will: bump `package.json`, open a release PR, create a signed tag, publish to npm with provenance, and create a GitHub Release.
 
 ---
 
