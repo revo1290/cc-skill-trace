@@ -20,7 +20,7 @@ import { createRequire } from "node:module";
 import { readEvents, clearEvents, appendEvent, pruneEvents } from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
-import { renderDashboard, renderCompact, renderStats, buildStats } from "./format.js";
+import { renderDashboard, renderCompact, renderTerse, renderStats, buildStats } from "./format.js";
 
 const _require = createRequire(import.meta.url);
 const VERSION = (_require("../../package.json") as { version: string }).version;
@@ -256,6 +256,7 @@ program
   .option("--skill <name>", "Filter by skill name")
   .option("--session <id>", "Filter by session ID")
   .option("--compact", "Compact table instead of dashboard")
+  .option("--terse", "Ultra-compact no-ANSI output (used by /skill-trace to minimise token cost)")
   .option("--json", "Output events as JSON array (pipe-friendly)")
   .option("--scan", "Scan session logs before showing (backfill)")
   .option("--follow", "Refresh dashboard every 2s (live tail)")
@@ -306,6 +307,8 @@ program
 
     if (opts.json) {
       process.stdout.write(JSON.stringify(events, null, 2) + "\n");
+    } else if (opts.terse) {
+      process.stdout.write(renderTerse(events) + "\n");
     } else if (opts.compact) {
       console.log(renderCompact(events));
     } else {

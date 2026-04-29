@@ -308,3 +308,36 @@ export function renderCompact(events: SkillInvocationEvent[]): string {
   }
   return lines.join("\n");
 }
+
+// ─── Terse (AI-optimised, minimal tokens) ─────────────────────────────────────
+// Used by SKILL.md to minimise context consumption when /skill-trace fires.
+// No ANSI, no padding — pure signal for the model.
+
+export function renderTerse(events: SkillInvocationEvent[]): string {
+  if (events.length === 0) {
+    return "0 events. Run: cc-skill-trace install then restart Claude Code.";
+  }
+
+  const total  = events.length;
+  const auto   = events.filter(e => e.source === "claude").length;
+  const rate   = Math.round((auto / total) * 100);
+  const skills = buildStats(events);
+
+  // "11ev 72%auto | commit:5(4a) review:3(2a) …"
+  const skillSummary = skills.slice(0, 8)
+    .map(s => `${s.name}:${s.total}(${s.auto}a)`)
+    .join(" ");
+  const lines: string[] = [`${total}ev ${rate}%auto | ${skillSummary}`];
+
+  // "14:34 commit auto "trigger text""
+  for (const ev of [...events].sort((a, b) => b.timestamp.localeCompare(a.timestamp))) {
+    const t    = new Date(ev.timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+    const src  = ev.source === "claude" ? "auto" : "user";
+    const trig = ev.triggerMessage
+      ? ` "${ev.triggerMessage.replace(/\n/g, " ").slice(0, 40)}"`
+      : "";
+    lines.push(`${t} ${ev.skillName} ${src}${trig}`);
+  }
+
+  return lines.join("\n");
+}

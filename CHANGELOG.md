@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `validateDateRange` guard — `--since > --before` now exits with a clear error message instead of silently returning zero results
 - Terminal dashboard now shows `cwd` and `~N tokens` metadata inline when available
 - `show` now warns on stderr when the installed SKILL.md is out of date with the current package version: `⚠  SKILL.md is outdated — run: cc-skill-trace install`
+- `show --terse` — ultra-compact no-ANSI output optimised for AI consumption; used by SKILL.md to minimise token cost per `/skill-trace` invocation
 
 ### Fixed
 - `report`, `stats`, and `export` commands now pass filter options (`--since`, `--before`, `--skill`, `--session`) directly to `readEvents` instead of loading all events and filtering in memory — consistent with `show` and more efficient for large stores
@@ -24,7 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `install` no longer returns early when the hook is already registered — SKILL.md is now always synced to the latest bundled version regardless of hook state
 
 ### Changed
-- SKILL.md compressed from ~2,455 chars (≈614 tokens) to ~781 chars (≈195 tokens) — **68% reduction in per-invocation token cost**; output capped at 15 events with `-n 15` to prevent unbounded context growth
+- SKILL.md compressed from ~2,455 chars (≈614 tokens) to ~637 chars (≈159 tokens) — **74% reduction in per-invocation token cost**
+- `show --terse` replaces `show --compact` in SKILL.md: no ANSI, no padding, stats+events in minimal format; output capped at `-n 15`; stderr suppressed with `2>/dev/null` to eliminate scan-progress noise from tool results
+- Description field shortened from ≈65 tokens to ≈42 tokens (saves tokens every session, not just on invocation)
+- Total `/skill-trace` invocation cost: ~428 tokens → ~256 tokens (**40% reduction**)
 - `install` now reports three distinct states for SKILL.md: "installed", "updated", or "already up to date"
 - `report` success message now includes the event count: `✓  Report → <path>  (N events)`
 - `hook-capture` debug output is now gated behind `CC_DEBUG=1` rather than always silent (stderr only, never blocks Claude Code)
