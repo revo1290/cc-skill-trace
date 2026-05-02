@@ -5,7 +5,7 @@ const _nodeMajor = parseInt(process.versions.node.split(".")[0]!, 10);
 if (_nodeMajor < 18) {
   process.stderr.write(
     `\ncc-skill-trace requires Node.js ≥ 18. You are running ${process.version}.\n` +
-    `Upgrade at https://nodejs.org\n\n`
+      `Upgrade at https://nodejs.org\n\n`
   );
   process.exit(1);
 }
@@ -29,7 +29,9 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.Z+-]*)?$/;
 
 function validateSince(value: string): string {
   if (!ISO_DATE_RE.test(value) || isNaN(Date.parse(value))) {
-    console.error(chalk.red(`✗  Invalid date value: "${value}". Expected ISO date, e.g. 2026-04-01`));
+    console.error(
+      chalk.red(`✗  Invalid date value: "${value}". Expected ISO date, e.g. 2026-04-01`)
+    );
     process.exit(1);
   }
   return value;
@@ -38,7 +40,9 @@ function validateSince(value: string): string {
 function validateLimit(value: string): string {
   const n = parseInt(value, 10);
   if (isNaN(n) || n < 1 || String(n) !== value.trim()) {
-    console.error(chalk.red(`✗  Invalid --limit value: "${value}". Expected a positive integer, e.g. 50`));
+    console.error(
+      chalk.red(`✗  Invalid --limit value: "${value}". Expected a positive integer, e.g. 50`)
+    );
     process.exit(1);
   }
   return value;
@@ -60,9 +64,13 @@ function validateDateRange(since: string | undefined, before: string | undefined
  */
 async function writeSettingsAtomic(path: string, data: unknown): Promise<void> {
   const json = JSON.stringify(data, null, 2);
-  const tmp  = path + ".tmp";
+  const tmp = path + ".tmp";
   // Best-effort backup — don't fail if the original doesn't exist yet
-  try { await fsCopyFile(path, path + ".bak"); } catch { /* no original yet */ }
+  try {
+    await fsCopyFile(path, path + ".bak");
+  } catch {
+    /* no original yet */
+  }
   await writeFile(tmp, json, "utf-8");
   await rename(tmp, path);
 }
@@ -81,7 +89,10 @@ async function scanAndMerge(opts: {
   const existingIds = new Set((await readEvents()).map((e) => e.id));
   let imported = 0;
   for (const ev of events) {
-    if (!existingIds.has(ev.id)) { await appendEvent(ev); imported++; }
+    if (!existingIds.has(ev.id)) {
+      await appendEvent(ev);
+      imported++;
+    }
   }
   return { events, imported };
 }
@@ -143,7 +154,9 @@ program
     let settings: Record<string, unknown> = {};
     try {
       settings = JSON.parse(await readFile(settingsPath, "utf-8"));
-    } catch { /* start fresh */ }
+    } catch {
+      /* start fresh */
+    }
 
     const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
     const preToolUse = (hooks.PreToolUse ?? []) as Array<Record<string, unknown>>;
@@ -180,7 +193,9 @@ program
         console.log(chalk.gray("  SKILL.md already up to date."));
       }
     } catch {
-      console.log(chalk.yellow("  Skill file not found — run from the package root or install from npm."));
+      console.log(
+        chalk.yellow("  Skill file not found — run from the package root or install from npm.")
+      );
     }
   });
 
@@ -191,7 +206,9 @@ program
   .helpOption(false)
   .action(async () => {
     const DEBUG = process.env["CC_DEBUG"] === "1";
-    const dbg = (msg: string) => { if (DEBUG) process.stderr.write(`[cc-skill-trace] ${msg}\n`); };
+    const dbg = (msg: string) => {
+      if (DEBUG) process.stderr.write(`[cc-skill-trace] ${msg}\n`);
+    };
 
     let raw = "";
     const MAX_STDIN_BYTES = 1024 * 64; // 64 KB — hook payloads are tiny
@@ -240,8 +257,15 @@ program
       gitBranch: payload.git_branch,
     };
 
-    dbg(`capturing ${event.source} invocation of "${event.skillName}" in session ${event.sessionId}`);
-    try { await appendEvent(event); dbg("event appended"); } catch (err) { dbg(`appendEvent failed: ${err}`); }
+    dbg(
+      `capturing ${event.source} invocation of "${event.skillName}" in session ${event.sessionId}`
+    );
+    try {
+      await appendEvent(event);
+      dbg("event appended");
+    } catch (err) {
+      dbg(`appendEvent failed: ${err}`);
+    }
     process.stdout.write(JSON.stringify({}));
     process.exit(0);
   });
@@ -271,8 +295,15 @@ program
     }
 
     if (opts.scan) {
-      const { events: scanned, imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
-      process.stderr.write(chalk.gray(`  Imported ${imported} new invocations (${scanned.length - imported} already stored).\n\n`));
+      const { events: scanned, imported } = await scanAndMerge({
+        since: opts.since,
+        sessionId: opts.session,
+      });
+      process.stderr.write(
+        chalk.gray(
+          `  Imported ${imported} new invocations (${scanned.length - imported} already stored).\n\n`
+        )
+      );
     }
 
     const readOpts = {
@@ -291,13 +322,23 @@ program
         if (newTs !== lastEventTs) {
           lastEventTs = newTs;
           process.stdout.write("\x1B[2J\x1B[0f"); // clear screen, cursor home
-          process.stdout.write((opts.compact ? renderCompact(events) : renderDashboard(events)) + "\n");
+          process.stdout.write(
+            (opts.compact ? renderCompact(events) : renderDashboard(events)) + "\n"
+          );
         }
-        process.stdout.write(chalk.gray(`  [Following — Ctrl+C to exit] `) + chalk.gray(new Date().toLocaleTimeString()) + "  \r");
+        process.stdout.write(
+          chalk.gray(`  [Following — Ctrl+C to exit] `) +
+            chalk.gray(new Date().toLocaleTimeString()) +
+            "  \r"
+        );
       };
       await tick();
       const interval = setInterval(tick, 2000);
-      const cleanup = () => { clearInterval(interval); process.stdout.write("\n"); process.exit(0); };
+      const cleanup = () => {
+        clearInterval(interval);
+        process.stdout.write("\n");
+        process.exit(0);
+      };
       process.on("SIGINT", cleanup);
       process.on("SIGTERM", cleanup);
       return;
@@ -327,13 +368,23 @@ program
   .option("--clear", "Clear existing events before scanning")
   .action(async (opts) => {
     validateDateRange(opts.since, opts.before);
-    if (opts.clear) { await clearEvents(); console.log(chalk.gray("  Cleared.")); }
+    if (opts.clear) {
+      await clearEvents();
+      console.log(chalk.gray("  Cleared."));
+    }
     const { events, imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
     let filtered = events;
-    if (opts.before) filtered = filtered.filter(e => e.timestamp <= opts.before);
-    if (opts.skill)  filtered = filtered.filter(e => e.skillName === opts.skill);
-    if (filtered.length === 0) { console.log(chalk.yellow("  No invocations found.")); return; }
-    console.log(chalk.green(`✓  Imported ${imported} new invocations (${events.length - imported} already stored).`));
+    if (opts.before) filtered = filtered.filter((e) => e.timestamp <= opts.before);
+    if (opts.skill) filtered = filtered.filter((e) => e.skillName === opts.skill);
+    if (filtered.length === 0) {
+      console.log(chalk.yellow("  No invocations found."));
+      return;
+    }
+    console.log(
+      chalk.green(
+        `✓  Imported ${imported} new invocations (${events.length - imported} already stored).`
+      )
+    );
     console.log("\n" + renderDashboard(filtered));
   });
 
@@ -351,7 +402,10 @@ program
   .action(async (opts) => {
     validateDateRange(opts.since, opts.before);
     if (opts.scan) {
-      const { events: scanned, imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
+      const { events: scanned, imported } = await scanAndMerge({
+        since: opts.since,
+        sessionId: opts.session,
+      });
       console.log(chalk.gray(`  Scanned: ${scanned.length} invocations (${imported} new).`));
     }
     const events = await readEvents({
@@ -374,7 +428,9 @@ program
         } else {
           execFileSync("xdg-open", [opts.output], { stdio: "ignore" });
         }
-      } catch { console.log(chalk.gray(`  Open manually: ${opts.output}`)); }
+      } catch {
+        console.log(chalk.gray(`  Open manually: ${opts.output}`));
+      }
     }
   });
 
@@ -387,7 +443,9 @@ program
     if (opts.olderThan) {
       const cutoff = parseDuration(String(opts.olderThan));
       const { removed, kept } = await pruneEvents(cutoff.toISOString());
-      console.log(chalk.green(`✓  Removed ${removed} events older than ${opts.olderThan} (${kept} kept).`));
+      console.log(
+        chalk.green(`✓  Removed ${removed} events older than ${opts.olderThan} (${kept} kept).`)
+      );
     } else {
       await clearEvents();
       console.log(chalk.green("✓  Cleared."));
@@ -446,18 +504,30 @@ program
     let out: string;
 
     if (fmt === "csv") {
-      const headers: (keyof typeof events[0])[] = [
-        "id", "timestamp", "sessionId", "skillName", "skillArgs",
-        "source", "triggerMessage", "injectedTokens", "cwd", "gitBranch",
+      const headers: (keyof (typeof events)[0])[] = [
+        "id",
+        "timestamp",
+        "sessionId",
+        "skillName",
+        "skillArgs",
+        "source",
+        "triggerMessage",
+        "injectedTokens",
+        "cwd",
+        "gitBranch",
       ];
       const esc = (v: unknown) => {
         const s = v == null ? "" : String(v);
         return s.includes(",") || s.includes('"') || s.includes("\n")
-          ? `"${s.replace(/"/g, '""')}"` : s;
+          ? `"${s.replace(/"/g, '""')}"`
+          : s;
       };
       // UTF-8 BOM ensures Excel opens the file without garbling non-ASCII characters
-      out = "\uFEFF" + headers.map(h => `"${h}"`).join(",") + "\n"
-        + events.map(e => headers.map(h => esc(e[h])).join(",")).join("\n");
+      out =
+        "\uFEFF" +
+        headers.map((h) => `"${h}"`).join(",") +
+        "\n" +
+        events.map((e) => headers.map((h) => esc(e[h])).join(",")).join("\n");
     } else if (fmt === "json") {
       out = JSON.stringify(events, null, 2);
     } else {
@@ -506,17 +576,20 @@ program
       return;
     }
 
-    const maxName = Math.max(...stats.map(s => s.name.length));
-    console.log(
-      chalk.gray("  " + "skill".padEnd(maxName) + "   total  auto  user")
-    );
+    const maxName = Math.max(...stats.map((s) => s.name.length));
+    console.log(chalk.gray("  " + "skill".padEnd(maxName) + "   total  auto  user"));
     console.log(chalk.gray("  " + "─".repeat(maxName + 20)));
     for (const s of stats) {
       console.log(
-        "  " + chalk.bold.yellow(s.name.padEnd(maxName)) +
-        "  " + chalk.white(String(s.total).padStart(5)) + chalk.gray("x") +
-        "  " + chalk.magenta(String(s.auto).padStart(4)) +
-        "  " + chalk.cyan(String(s.byUser).padStart(4))
+        "  " +
+          chalk.bold.yellow(s.name.padEnd(maxName)) +
+          "  " +
+          chalk.white(String(s.total).padStart(5)) +
+          chalk.gray("x") +
+          "  " +
+          chalk.magenta(String(s.auto).padStart(4)) +
+          "  " +
+          chalk.cyan(String(s.byUser).padStart(4))
       );
     }
   });
@@ -541,7 +614,7 @@ program
 
     const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
     const preToolUse = (hooks.PreToolUse ?? []) as Array<Record<string, unknown>>;
-    const filtered = preToolUse.filter(h => !JSON.stringify(h).includes("cc-skill-trace"));
+    const filtered = preToolUse.filter((h) => !JSON.stringify(h).includes("cc-skill-trace"));
 
     if (filtered.length === preToolUse.length) {
       console.log(chalk.yellow("⚠  Hook not found in: " + settingsPath));

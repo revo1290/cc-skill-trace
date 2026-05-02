@@ -24,23 +24,29 @@ export function vlen(s: string): number {
   for (const { segment } of _segmenter.segment(plain)) {
     const cp = segment.codePointAt(0) ?? 0;
     // Lone ZWJ or variation selectors that start a segment are zero-width
-    if (cp === 0x200D || cp === 0xFE0F || cp === 0xFE0E) continue;
+    if (cp === 0x200d || cp === 0xfe0f || cp === 0xfe0e) continue;
     // Keycap sequences (1️⃣ #️⃣): base char is ASCII but renders 2 columns wide
-    if (segment.includes("\u20E3")) { len += 2; continue; }
+    if (segment.includes("\u20E3")) {
+      len += 2;
+      continue;
+    }
     // Text→emoji via VS16 (©️ ™️): base char not in emoji range but renders 2 wide
-    if (segment.includes("\uFE0F")) { len += 2; continue; }
+    if (segment.includes("\uFE0F")) {
+      len += 2;
+      continue;
+    }
     // Wide chars: CJK ideographs, Hangul, fullwidth forms, emoji block
     if (
-      (cp >= 0x1100 && cp <= 0x115F) ||
-      (cp >= 0x2E80 && cp <= 0x303E) ||
-      (cp >= 0x3040 && cp <= 0xA4CF) ||
-      (cp >= 0xAC00 && cp <= 0xD7A3) ||
-      (cp >= 0xF900 && cp <= 0xFAFF) ||
-      (cp >= 0xFE10 && cp <= 0xFE1F) ||
-      (cp >= 0xFE30 && cp <= 0xFE4F) ||
-      (cp >= 0xFF00 && cp <= 0xFF60) ||
-      (cp >= 0xFFE0 && cp <= 0xFFE6) ||
-      (cp >= 0x1F300 && cp <= 0x1FAFF)
+      (cp >= 0x1100 && cp <= 0x115f) ||
+      (cp >= 0x2e80 && cp <= 0x303e) ||
+      (cp >= 0x3040 && cp <= 0xa4cf) ||
+      (cp >= 0xac00 && cp <= 0xd7a3) ||
+      (cp >= 0xf900 && cp <= 0xfaff) ||
+      (cp >= 0xfe10 && cp <= 0xfe1f) ||
+      (cp >= 0xfe30 && cp <= 0xfe4f) ||
+      (cp >= 0xff00 && cp <= 0xff60) ||
+      (cp >= 0xffe0 && cp <= 0xffe6) ||
+      (cp >= 0x1f300 && cp <= 0x1faff)
     ) {
       len += 2;
     } else {
@@ -62,7 +68,10 @@ function bar(ratio: number, width: number, color: (s: string) => string): string
 
 function fmtTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, {
-    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
   });
 }
 
@@ -74,10 +83,6 @@ function hr(char = "─"): string {
 
 function section(title: string): string {
   return chalk.bold.white(title);
-}
-
-function row(label: string, value: string): string {
-  return chalk.gray("  ") + padRight(label, 20) + value;
 }
 
 // ─── Stats bar chart ─────────────────────────────────────────────────────────
@@ -92,7 +97,8 @@ export interface SkillStat {
 export function buildStats(events: SkillInvocationEvent[]): SkillStat[] {
   const map: Record<string, SkillStat> = {};
   for (const ev of events) {
-    if (!map[ev.skillName]) map[ev.skillName] = { name: ev.skillName, total: 0, auto: 0, byUser: 0 };
+    if (!map[ev.skillName])
+      map[ev.skillName] = { name: ev.skillName, total: 0, auto: 0, byUser: 0 };
     map[ev.skillName].total++;
     if (ev.source === "claude") map[ev.skillName].auto++;
     else map[ev.skillName].byUser++;
@@ -124,7 +130,7 @@ export function renderStats(events: SkillInvocationEvent[]): string {
     if (ev.source === "claude") dayMap[day].auto++;
   }
   const days = Object.keys(dayMap).sort().slice(-14);
-  const maxDay = Math.max(...days.map(d => dayMap[d]!.total), 1);
+  const maxDay = Math.max(...days.map((d) => dayMap[d]!.total), 1);
   const dayBarW = 24;
 
   lines.push("");
@@ -133,14 +139,21 @@ export function renderStats(events: SkillInvocationEvent[]): string {
   for (const day of days) {
     const d = dayMap[day]!;
     const autoB = "█".repeat(Math.round((d.auto / maxDay) * dayBarW));
-    const userFill = Math.min(dayBarW - autoB.length, Math.round(((d.total - d.auto) / maxDay) * dayBarW));
+    const userFill = Math.min(
+      dayBarW - autoB.length,
+      Math.round(((d.total - d.auto) / maxDay) * dayBarW)
+    );
     const userB = "█".repeat(userFill);
     const emptyB = "░".repeat(Math.max(0, dayBarW - autoB.length - userB.length));
     const label = padRight(chalk.gray(day), 12);
     lines.push(
-      "  " + label + "  " +
-      chalk.magenta(autoB) + chalk.cyan(userB) + chalk.gray(emptyB) +
-      chalk.bold.white(`  ${d.total}x`)
+      "  " +
+        label +
+        "  " +
+        chalk.magenta(autoB) +
+        chalk.cyan(userB) +
+        chalk.gray(emptyB) +
+        chalk.bold.white(`  ${d.total}x`)
     );
   }
 
@@ -179,10 +192,7 @@ export function renderDashboard(events: SkillInvocationEvent[]): string {
 
   // ── header ──
   lines.push(hr("═"));
-  lines.push(
-    chalk.bold.white("  🔍 cc-skill-trace ") +
-    chalk.gray("─ Skill Invocation Debugger")
-  );
+  lines.push(chalk.bold.white("  🔍 cc-skill-trace ") + chalk.gray("─ Skill Invocation Debugger"));
   lines.push(hr("─"));
 
   if (events.length === 0) {
@@ -199,19 +209,23 @@ export function renderDashboard(events: SkillInvocationEvent[]): string {
   }
 
   // ── summary stats ──
-  const total   = events.length;
-  const autoCnt = events.filter(e => e.source === "claude").length;
+  const total = events.length;
+  const autoCnt = events.filter((e) => e.source === "claude").length;
   const userCnt = total - autoCnt;
   const autoRate = Math.round((autoCnt / total) * 100);
-  const uniqueSkills = new Set(events.map(e => e.skillName)).size;
+  const uniqueSkills = new Set(events.map((e) => e.skillName)).size;
 
   lines.push("");
   lines.push(
     chalk.gray("  ") +
-    chalk.bold.white(String(total).padStart(4)) + chalk.gray(" invocations   ") +
-    chalk.magenta(String(autoCnt).padStart(3)) + chalk.gray(" 🤖 auto   ") +
-    chalk.cyan(String(userCnt).padStart(3)) + chalk.gray(" 👤 user   ") +
-    chalk.yellow(String(uniqueSkills).padStart(3)) + chalk.gray(" unique skills")
+      chalk.bold.white(String(total).padStart(4)) +
+      chalk.gray(" invocations   ") +
+      chalk.magenta(String(autoCnt).padStart(3)) +
+      chalk.gray(" 🤖 auto   ") +
+      chalk.cyan(String(userCnt).padStart(3)) +
+      chalk.gray(" 👤 user   ") +
+      chalk.yellow(String(uniqueSkills).padStart(3)) +
+      chalk.gray(" unique skills")
   );
   lines.push("");
 
@@ -220,8 +234,8 @@ export function renderDashboard(events: SkillInvocationEvent[]): string {
   const rateColor = autoRate >= 70 ? chalk.magenta : chalk.cyan;
   lines.push(
     chalk.gray("  🤖 Auto-trigger  ") +
-    bar(autoRate / 100, rateBarW, rateColor) +
-    chalk.bold.white(`  ${autoRate}%`)
+      bar(autoRate / 100, rateBarW, rateColor) +
+      chalk.bold.white(`  ${autoRate}%`)
   );
   lines.push("");
   lines.push(hr("─"));
@@ -230,25 +244,29 @@ export function renderDashboard(events: SkillInvocationEvent[]): string {
   const stats = buildStats(events);
   const maxTotal = stats[0]?.total ?? 1;
   const barW = 24;
-  const nameW = Math.min(22, Math.max(8, ...stats.map(s => s.name.length)) + 1);
+  const nameW = Math.min(22, Math.max(8, ...stats.map((s) => s.name.length)) + 1);
 
   lines.push("");
   lines.push(section("  📊 Skills"));
   lines.push("");
 
   for (const s of stats.slice(0, 8)) {
-    const autoB  = "█".repeat(Math.round((s.auto   / maxTotal) * barW));
+    const autoB = "█".repeat(Math.round((s.auto / maxTotal) * barW));
     const userFill = Math.min(barW - autoB.length, Math.round((s.byUser / maxTotal) * barW));
-    const userB  = "█".repeat(userFill);
+    const userB = "█".repeat(userFill);
     const emptyB = "░".repeat(Math.max(0, barW - autoB.length - userB.length));
     const nameLabel = padRight(chalk.bold.yellow(s.name), nameW + 9 /* ansi overhead approx */);
     lines.push(
-      "  " + nameLabel + "  " +
-      chalk.magenta(autoB) + chalk.cyan(userB) + chalk.gray(emptyB) +
-      chalk.bold.white(`  ${s.total}x`) +
-      chalk.gray(`  ${s.auto}auto`) +
-      chalk.gray(` · `) +
-      chalk.gray(`${s.byUser}user`)
+      "  " +
+        nameLabel +
+        "  " +
+        chalk.magenta(autoB) +
+        chalk.cyan(userB) +
+        chalk.gray(emptyB) +
+        chalk.bold.white(`  ${s.total}x`) +
+        chalk.gray(`  ${s.auto}auto`) +
+        chalk.gray(` · `) +
+        chalk.gray(`${s.byUser}user`)
     );
   }
 
@@ -256,21 +274,17 @@ export function renderDashboard(events: SkillInvocationEvent[]): string {
   lines.push(hr("─"));
 
   // ── recent timeline ──
-  const recent = [...events]
-    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
-    .slice(0, 12);
+  const recent = [...events].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, 12);
 
   lines.push("");
   lines.push(section("  🕐 Recent invocations") + chalk.gray("  (newest first)"));
   lines.push("");
 
   for (const ev of recent) {
-    const dot  = ev.source === "claude" ? chalk.magenta("●") : chalk.cyan("●");
+    const dot = ev.source === "claude" ? chalk.magenta("●") : chalk.cyan("●");
     const time = chalk.gray(fmtTime(ev.timestamp));
     const name = padRight(chalk.bold.yellow(ev.skillName), nameW + 9);
-    const src  = ev.source === "claude"
-      ? chalk.magenta("🤖 auto")
-      : chalk.cyan("👤 user");
+    const src = ev.source === "claude" ? chalk.magenta("🤖 auto") : chalk.cyan("👤 user");
 
     const maxTriggerW = Math.max(10, W() - nameW - 36);
     const trigger = ev.triggerMessage
@@ -278,7 +292,7 @@ export function renderDashboard(events: SkillInvocationEvent[]): string {
       : chalk.gray("(no trigger context)");
 
     const meta: string[] = [];
-    if (ev.cwd)            meta.push(chalk.gray(`  cwd: ${ev.cwd}`));
+    if (ev.cwd) meta.push(chalk.gray(`  cwd: ${ev.cwd}`));
     if (ev.injectedTokens) meta.push(chalk.gray(`  ~${ev.injectedTokens.toLocaleString()} tokens`));
     const metaLine = meta.length ? "\n       " + meta.join("  ") : "";
 
@@ -287,7 +301,11 @@ export function renderDashboard(events: SkillInvocationEvent[]): string {
 
   lines.push("");
   lines.push(hr("─"));
-  lines.push(chalk.gray("  ") + chalk.underline.gray("cc-skill-trace report") + chalk.gray("  → interactive browser dashboard"));
+  lines.push(
+    chalk.gray("  ") +
+      chalk.underline.gray("cc-skill-trace report") +
+      chalk.gray("  → interactive browser dashboard")
+  );
   lines.push(hr("═"));
 
   return lines.join("\n");
@@ -318,21 +336,26 @@ export function renderTerse(events: SkillInvocationEvent[]): string {
     return "0 events. Run: cc-skill-trace install then restart Claude Code.";
   }
 
-  const total  = events.length;
-  const auto   = events.filter(e => e.source === "claude").length;
-  const rate   = Math.round((auto / total) * 100);
+  const total = events.length;
+  const auto = events.filter((e) => e.source === "claude").length;
+  const rate = Math.round((auto / total) * 100);
   const skills = buildStats(events);
 
   // "11ev 72%auto | commit:5(4a) review:3(2a) …"
-  const skillSummary = skills.slice(0, 8)
-    .map(s => `${s.name}:${s.total}(${s.auto}a)`)
+  const skillSummary = skills
+    .slice(0, 8)
+    .map((s) => `${s.name}:${s.total}(${s.auto}a)`)
     .join(" ");
   const lines: string[] = [`${total}ev ${rate}%auto | ${skillSummary}`];
 
   // "14:34 commit auto "trigger text""
   for (const ev of [...events].sort((a, b) => b.timestamp.localeCompare(a.timestamp))) {
-    const t    = new Date(ev.timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
-    const src  = ev.source === "claude" ? "auto" : "user";
+    const t = new Date(ev.timestamp).toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    const src = ev.source === "claude" ? "auto" : "user";
     const trig = ev.triggerMessage
       ? ` "${ev.triggerMessage.replace(/\n/g, " ").slice(0, 40)}"`
       : "";
