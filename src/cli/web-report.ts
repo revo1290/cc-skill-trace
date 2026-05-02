@@ -46,9 +46,9 @@ export function buildHtmlReport(events: SkillInvocationEvent[]): string {
   }
 
   // ── JSON data embedded in the page ───────────────────────────────────────
-  const eventsJson    = safeJson(events);
+  const eventsJson = safeJson(events);
   const topSkillsJson = safeJson(topSkills);
-  const byDayJson     = safeJson(
+  const byDayJson = safeJson(
     Object.entries(byDay).map(([day, evs]) => ({ day, count: evs.length }))
   );
 

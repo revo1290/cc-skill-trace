@@ -3,7 +3,13 @@ import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, basename } from "node:path";
 import { createInterface } from "node:readline";
-import type { SessionLogEntry, SkillInvocationEvent, ToolUse, ToolResult, ContentBlock } from "./types.js";
+import type {
+  SessionLogEntry,
+  SkillInvocationEvent,
+  ToolUse,
+  ToolResult,
+  ContentBlock,
+} from "./types.js";
 
 // Read at call time so tests and CLI can override via CC_PROJECTS_DIR at runtime (#38)
 function getProjectsDir(): string {
@@ -19,7 +25,7 @@ function escapeRegExp(s: string): string {
 async function mapWithLimit<T, R>(
   items: T[],
   limit: number,
-  fn: (item: T) => Promise<R>,
+  fn: (item: T) => Promise<R>
 ): Promise<R[]> {
   const results: (R | undefined)[] = new Array(items.length);
   let next = 0;
@@ -133,7 +139,7 @@ export async function extractInvocationsFromFile(
       const bareSkillName = skillName.includes(":") ? skillName.split(":").pop()! : skillName;
       const slashCmdRe = new RegExp(
         `^/(${escapeRegExp(skillName)}|${escapeRegExp(bareSkillName)})(\\s|$)`,
-        "i",
+        "i"
       );
       const isUserInvoked = slashCmdRe.test(triggerMessage?.trimStart() ?? "");
 
@@ -150,12 +156,13 @@ export async function extractInvocationsFromFile(
           (b): b is ToolResult => b.type === "tool_result" && b.tool_use_id === call.id
         );
         if (result) {
-          const text = typeof result.content === "string"
-            ? result.content
-            : (result.content as Array<{ type: string; text?: string }>)
-                .filter((b) => b.type === "text")
-                .map((b) => b.text ?? "")
-                .join("");
+          const text =
+            typeof result.content === "string"
+              ? result.content
+              : (result.content as Array<{ type: string; text?: string }>)
+                  .filter((b) => b.type === "text")
+                  .map((b) => b.text ?? "")
+                  .join("");
           if (text) injectedTokens = Math.round(text.length / 4);
           break;
         }
@@ -185,11 +192,13 @@ export async function extractInvocationsFromFile(
  * Pass `since` (ISO string) to limit to recent sessions.
  * Pass `onProgress` to receive (done, total) updates during scanning.
  */
-export async function extractAllInvocations(opts: {
-  since?: string;
-  sessionId?: string;
-  onProgress?: (done: number, total: number) => void;
-} = {}): Promise<SkillInvocationEvent[]> {
+export async function extractAllInvocations(
+  opts: {
+    since?: string;
+    sessionId?: string;
+    onProgress?: (done: number, total: number) => void;
+  } = {}
+): Promise<SkillInvocationEvent[]> {
   const files = await findAllSessionFiles();
   const allEvents: SkillInvocationEvent[] = [];
   let done = 0;

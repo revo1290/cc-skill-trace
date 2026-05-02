@@ -19,9 +19,18 @@ const writeQueues = new Map<string, Promise<void>>();
 
 function enqueueWrite<T = void>(dir: string, fn: () => Promise<T>): Promise<T> {
   const prev = writeQueues.get(dir) ?? Promise.resolve();
-  const next = prev.then(() => fn(), () => fn());
+  const next = prev.then(
+    () => fn(),
+    () => fn()
+  );
   // Store a void chain so the queue type stays consistent
-  writeQueues.set(dir, next.then(() => {}, () => {}));
+  writeQueues.set(
+    dir,
+    next.then(
+      () => {},
+      () => {}
+    )
+  );
   return next;
 }
 
@@ -61,7 +70,9 @@ export function appendEvent(event: SkillInvocationEvent, dir = STORE_DIR): Promi
  * Accepts either a legacy `readEvents(dirString)` call or the new
  * `readEvents(options)` form — both are supported for backward compatibility.
  */
-export async function readEvents(opts: ReadEventsOptions | string = {}): Promise<SkillInvocationEvent[]> {
+export async function readEvents(
+  opts: ReadEventsOptions | string = {}
+): Promise<SkillInvocationEvent[]> {
   // Legacy: readEvents(dirString)
   const options: ReadEventsOptions = typeof opts === "string" ? { dir: opts } : opts;
   const dir = options.dir ?? STORE_DIR;
@@ -79,9 +90,9 @@ export async function readEvents(opts: ReadEventsOptions | string = {}): Promise
     try {
       const ev = JSON.parse(line) as SkillInvocationEvent;
       // Apply filters at parse time — avoids accumulating excluded events in memory
-      if (options.since     && ev.timestamp  < options.since)     continue;
-      if (options.before    && ev.timestamp  > options.before)    continue;
-      if (options.skill     && ev.skillName !== options.skill)    continue;
+      if (options.since && ev.timestamp < options.since) continue;
+      if (options.before && ev.timestamp > options.before) continue;
+      if (options.skill && ev.skillName !== options.skill) continue;
       if (options.sessionId && ev.sessionId !== options.sessionId) continue;
       events.push(ev);
     } catch {
@@ -107,7 +118,7 @@ export function clearEvents(dir = STORE_DIR): Promise<void> {
  *  Returns counts of removed and kept events. */
 export function pruneEvents(
   beforeIso: string,
-  dir = STORE_DIR,
+  dir = STORE_DIR
 ): Promise<{ removed: number; kept: number }> {
   return enqueueWrite(dir, async () => {
     await ensureStoreDir(dir);
