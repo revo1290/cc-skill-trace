@@ -21,6 +21,7 @@ import { readEvents, clearEvents, appendEvent, pruneEvents } from "../core/store
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
 import { renderDashboard, renderCompact, renderTerse, renderStats, buildStats } from "./format.js";
+import { normalizeSkillMd, skillMdChanged } from "./skill-md.js";
 
 const _require = createRequire(import.meta.url);
 const VERSION = (_require("../../package.json") as { version: string }).version;
@@ -134,7 +135,7 @@ async function isSkillMdStale(): Promise<boolean> {
       readFile(installedSkillMdPath, "utf-8"),
       readFile(await bundledSkillMdPath(), "utf-8"),
     ]);
-    return installed !== bundled;
+    return skillMdChanged(installed, bundled);
   } catch {
     return false;
   }
@@ -182,11 +183,13 @@ program
       const bundled = await readFile(skillSrc, "utf-8");
       const installed = await readFile(installedSkillMdPath, "utf-8").catch(() => null);
       await mkdir(skillDir, { recursive: true });
-      await fsCopyFile(skillSrc, installedSkillMdPath);
+      // Write with LF-normalized content so a Windows CRLF checkout of the bundled
+      // file doesn't leave the installed copy looking permanently stale (#181).
+      await writeFile(installedSkillMdPath, normalizeSkillMd(bundled), "utf-8");
       if (installed === null) {
         console.log(chalk.green("✓  Skill installed   → " + skillDir));
         console.log(chalk.gray("  Use /skill-trace inside Claude Code to open the dashboard."));
-      } else if (installed !== bundled) {
+      } else if (skillMdChanged(installed, bundled)) {
         console.log(chalk.green("✓  SKILL.md updated  → " + skillDir));
         console.log(chalk.gray("  Restart Claude Code to apply the updated skill definition."));
       } else {
