@@ -3,6 +3,7 @@ import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, basename } from "node:path";
 import { createInterface } from "node:readline";
+import { expandTilde } from "./utils.js";
 import type {
   SessionLogEntry,
   SkillInvocationEvent,
@@ -13,7 +14,8 @@ import type {
 
 // Read at call time so tests and CLI can override via CC_PROJECTS_DIR at runtime (#38)
 function getProjectsDir(): string {
-  return process.env["CC_PROJECTS_DIR"] ?? join(homedir(), ".claude", "projects");
+  const raw = process.env["CC_PROJECTS_DIR"] ?? join(homedir(), ".claude", "projects");
+  return expandTilde(raw);
 }
 
 function escapeRegExp(s: string): string {
