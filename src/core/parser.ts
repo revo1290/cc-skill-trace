@@ -43,6 +43,53 @@ async function mapWithLimit<T, R>(
 
 // ─── JSONL file helpers ──────────────────────────────────────────────────────
 
+// Entry `type` values used by Claude Code session logs. Kept permissive so a
+// format change on the upstream side degrades gracefully rather than dropping
+// every file.
+const CLAUDE_ENTRY_TYPES = new Set([
+  "message",
+  "tool_result",
+  "summary",
+  "user",
+  "assistant",
+  "system",
+]);
+
+/**
+ * Cheap heuristic that a `.jsonl` file is actually a Claude Code session log.
+ * Only the first few non-empty lines are inspected, so unrelated JSONL files
+ * that happen to live under `CC_PROJECTS_DIR` are skipped without being fully
+ * read or mis-parsed as skill invocations (#171).
+ */
+export async function isClaudeSessionFile(filePath: string): Promise<boolean> {
+  const stream = createReadStream(filePath, { encoding: "utf-8" });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    let checked = 0;
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (++checked > 5) break;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue; // tolerate a malformed leading line
+      }
+      if (!parsed || typeof parsed !== "object") continue;
+      const obj = parsed as Record<string, unknown>;
+      if (typeof obj["sessionId"] === "string") return true;
+      if (typeof obj["type"] === "string" && CLAUDE_ENTRY_TYPES.has(obj["type"])) return true;
+      const message = obj["message"];
+      if (message && typeof message === "object" && "role" in message) return true;
+    }
+    return false;
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+}
+
 async function* readJsonlFile(filePath: string): AsyncGenerator<SessionLogEntry> {
   const rl = createInterface({
     input: createReadStream(filePath, { encoding: "utf-8" }),
@@ -59,7 +106,7 @@ async function* readJsonlFile(filePath: string): AsyncGenerator<SessionLogEntry>
   }
 }
 
-async function findAllSessionFiles(): Promise<string[]> {
+async function findAllSessionFiles(sessionId?: string): Promise<string[]> {
   const files: string[] = [];
   let projectDirs: string[];
   try {
@@ -74,9 +121,12 @@ async function findAllSessionFiles(): Promise<string[]> {
       if (!s.isDirectory()) continue;
       const sessionFiles = await readdir(projectPath);
       for (const f of sessionFiles) {
-        if (f.endsWith(".jsonl")) {
-          files.push(join(projectPath, f));
-        }
+        if (!f.endsWith(".jsonl")) continue;
+        // Fast path: Claude Code names session files "<sessionId>.jsonl", so when
+        // filtering by session we can skip unrelated files by name instead of
+        // reading and parsing every session file. (#188)
+        if (sessionId && basename(f, ".jsonl") !== sessionId) continue;
+        files.push(join(projectPath, f));
       }
     } catch {
       // skip unreadable dirs
@@ -96,6 +146,16 @@ export async function extractInvocationsFromFile(
   filePath: string
 ): Promise<SkillInvocationEvent[]> {
   const events: SkillInvocationEvent[] = [];
+
+  // Skip files that are not Claude Code session logs so a stray `.jsonl`
+  // under CC_PROJECTS_DIR is not parsed as skill invocations (#171).
+  if (!(await isClaudeSessionFile(filePath))) {
+    if (process.env["CC_DEBUG"]) {
+      process.stderr.write(`[cc-skill-trace] skipping non-session file: ${filePath}\n`);
+    }
+    return events;
+  }
+
   const entries: SessionLogEntry[] = [];
 
   for await (const entry of readJsonlFile(filePath)) {
@@ -201,7 +261,13 @@ export async function extractAllInvocations(
     onProgress?: (done: number, total: number) => void;
   } = {}
 ): Promise<SkillInvocationEvent[]> {
-  const files = await findAllSessionFiles();
+  let files = await findAllSessionFiles(opts.sessionId);
+  // Fallback: if a session filter matched no files by name (e.g. Claude Code's
+  // file-naming convention changed), scan everything so the post-read sessionId
+  // filter below can still recover the session. (#188)
+  if (opts.sessionId && files.length === 0) {
+    files = await findAllSessionFiles();
+  }
   const allEvents: SkillInvocationEvent[] = [];
   let done = 0;
 
