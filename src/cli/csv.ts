@@ -29,9 +29,7 @@ const BOM = "\uFEFF";
 /** Escape a single CSV field per RFC 4180 (quote if it contains , " or newline). */
 function escapeField(value: unknown): string {
   const s = value == null ? "" : String(value);
-  return s.includes(",") || s.includes('"') || s.includes("\n")
-    ? `"${s.replace(/"/g, '""')}"`
-    : s;
+  return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 /** Serialize events to a CSV string, optionally prefixed with a UTF-8 BOM. */
