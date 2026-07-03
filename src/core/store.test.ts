@@ -5,7 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
-import { appendEvent, readEvents, clearEvents, pruneEvents, backupEvents } from "./store.js";
+import { appendEvent, readEvents, clearEvents, pruneEvents, backupEvents, pendingWriteQueueCount } from "./store.js";
 import type { SkillInvocationEvent } from "./types.js";
 
 function makeEvent(overrides: Partial<SkillInvocationEvent> = {}): SkillInvocationEvent {
@@ -91,6 +91,43 @@ describe("store", () => {
       assert.equal(events.length, 2);
       assert.equal(events[0].id, "good-1");
       assert.equal(events[1].id, "good-2");
+    });
+  });
+
+  describe("write queue lifecycle (#169)", () => {
+    it("releases the Map entry once writes to a dir have drained", async () => {
+      const qDir = dir + "-queue-release";
+      await appendEvent(makeEvent({ id: "q1" }), qDir);
+      await appendEvent(makeEvent({ id: "q2" }), qDir);
+      // Allow the trailing .finally cleanup (a microtask past settlement) to run.
+      await Promise.resolve();
+      await new Promise((r) => setImmediate(r));
+      assert.equal(pendingWriteQueueCount(), 0);
+    });
+
+    it("does not leak an entry per distinct dir", async () => {
+      const dirs = Array.from({ length: 20 }, (_, i) => `${dir}-leak-${i}`);
+      await Promise.all(dirs.map((d) => appendEvent(makeEvent({ id: "x" }), d)));
+      await new Promise((r) => setImmediate(r));
+      assert.equal(pendingWriteQueueCount(), 0);
+    });
+
+    it("still serializes concurrent writes to the same dir in order", async () => {
+      const sDir = dir + "-serialize";
+      await clearEvents(sDir);
+      // Fire many appends without awaiting between them — they must not interleave.
+      await Promise.all(
+        Array.from({ length: 25 }, (_, i) =>
+          appendEvent(makeEvent({ id: `s-${i}`, timestamp: `2026-01-01T00:00:00.${String(i).padStart(3, "0")}Z` }), sDir)
+        )
+      );
+      const events = await readEvents(sDir);
+      assert.equal(events.length, 25);
+      // Every line parsed cleanly and all 25 ids are present (no torn/interleaved writes).
+      assert.deepEqual(
+        [...events.map((e) => e.id)].sort(),
+        Array.from({ length: 25 }, (_, i) => `s-${i}`).sort()
+      );
     });
   });
 

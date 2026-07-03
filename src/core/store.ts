@@ -24,14 +24,29 @@ function enqueueWrite<T = void>(dir: string, fn: () => Promise<T>): Promise<T> {
     () => fn()
   );
   // Store a void chain so the queue type stays consistent
-  writeQueues.set(
-    dir,
-    next.then(
-      () => {},
-      () => {}
-    )
+  const tail = next.then(
+    () => {},
+    () => {}
   );
+  writeQueues.set(dir, tail);
+  // Release the Map entry once this write settles, but only if no newer write
+  // has been enqueued in the meantime (i.e. `tail` is still the current tail).
+  // Otherwise entries grow unbounded — one per distinct dir kept alive for the
+  // whole process lifetime (#169: --follow, programmatic API, many-dir tests).
+  void tail.finally(() => {
+    if (writeQueues.get(dir) === tail) {
+      writeQueues.delete(dir);
+    }
+  });
   return next;
+}
+
+/**
+ * Number of store directories with an in-flight (or not-yet-released) write
+ * queue. Intended for tests/diagnostics — a healthy idle store settles to 0.
+ */
+export function pendingWriteQueueCount(): number {
+  return writeQueues.size;
 }
 
 // ─── Read options ────────────────────────────────────────────────────────────
