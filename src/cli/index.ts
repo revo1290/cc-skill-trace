@@ -17,7 +17,14 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { readEvents, clearEvents, appendEvent, pruneEvents } from "../core/store.js";
+import {
+  readEvents,
+  clearEvents,
+  appendEvent,
+  pruneEvents,
+  backupEvents,
+  EVENTS_FILE,
+} from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
 import { renderDashboard, renderCompact, renderTerse, renderStats, buildStats } from "./format.js";
@@ -355,6 +362,15 @@ program
   .action(async (opts) => {
     validateDateRange(opts.since, opts.before);
     if (opts.clear) {
+      // Back up before clearing so a mid-scan failure can't destroy history (#180).
+      const { backupPath, rotatedTo } = await backupEvents();
+      if (backupPath) {
+        if (rotatedTo) {
+          console.log(chalk.gray(`  Previous backup moved to ${rotatedTo}`));
+        }
+        console.log(chalk.gray(`  Backup saved to ${backupPath}`));
+        console.log(chalk.gray(`  To restore: cp ${backupPath} ${EVENTS_FILE}`));
+      }
       await clearEvents();
       console.log(chalk.gray("  Cleared."));
     }
