@@ -11,6 +11,21 @@ function W(): number {
 const _segmenter = new Intl.Segmenter();
 
 /**
+ * Match ANSI escape sequences so they can be stripped before measuring width.
+ *
+ * Covers, in order:
+ *  - CSI sequences (`\x1B[…<final>`) — includes SGR colors (`\x1B[32m`) as well
+ *    as cursor moves / screen clears (`\x1B[2J`, `\x1B[1;1H`) that the previous
+ *    SGR-only regex missed.
+ *  - OSC sequences (`\x1B]…`) terminated by BEL (`\x07`) or ST (`\x1B\\`) —
+ *    e.g. OSC 8 hyperlinks and OSC 0 window titles.
+ *  - Other two-byte escapes (`\x1B` + a single Fe byte).
+ */
+// Order matters: OSC (`\x1B]…`) and CSI (`\x1B[…`) are matched before the
+// generic two-byte-escape branch, whose char class also contains `]`/`[`.
+const ANSI_RE = /\x1B(?:\][^\x07\x1B]*(?:\x07|\x1B\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g;
+
+/**
  * Visual (terminal column) length of a string.
  *
  * Uses Intl.Segmenter so that each ZWJ sequence (👨‍👩‍👧), variation-selector
@@ -19,7 +34,7 @@ const _segmenter = new Intl.Segmenter();
  * ANSI escape sequences are stripped before measuring.
  */
 export function vlen(s: string): number {
-  const plain = s.replace(/\x1B\[[0-9;]*m/g, "");
+  const plain = s.replace(ANSI_RE, "");
   let len = 0;
   for (const { segment } of _segmenter.segment(plain)) {
     const cp = segment.codePointAt(0) ?? 0;

@@ -111,6 +111,21 @@ describe("vlen", () => {
     assert.equal(vlen(colored), 2);
   });
 
+  it("non-SGR CSI sequences are stripped (cursor move / screen clear)", () => {
+    // \x1B[2J (clear screen) and \x1B[1;1H (cursor home) are not SGR ('m')
+    assert.equal(vlen("\x1B[2Jhi\x1B[1;1H"), 2);
+  });
+
+  it("OSC 8 hyperlinks are stripped, leaving only the visible label", () => {
+    // ESC ]8;;URL ST  label  ESC ]8;; ST  → only "label" is visible
+    const link = "\x1B]8;;https://example.com\x1B\\label\x1B]8;;\x1B\\";
+    assert.equal(vlen(link), 5);
+  });
+
+  it("OSC window-title sequences (BEL-terminated) are stripped", () => {
+    assert.equal(vlen("\x1B]0;my title\x07hi"), 2);
+  });
+
   it("mixed ASCII and wide chars", () => {
     assert.equal(vlen("A日B"), 4); // 1 + 2 + 1
   });

@@ -56,7 +56,7 @@ src/
 - イベントストアは JSONL（SQLite は v2 で検討）
 - `CC_DEBUG=1` 環境変数で `hook-capture` のデバッグログを stderr に出力
 - `CC_SCAN_CONCURRENCY` 環境変数でスキャン並列数を変更（デフォルト: 8）
-- `CC_PROJECTS_DIR` 環境変数でスキャン対象ディレクトリを変更
+- `CC_PROJECTS_DIR` 環境変数でスキャン対象ディレクトリを変更（先頭の `~/` はホームディレクトリに展開される）
 
 ### hook-capture と triggerMessage の制限
 
