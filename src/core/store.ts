@@ -114,6 +114,50 @@ export function clearEvents(dir = STORE_DIR): Promise<void> {
   });
 }
 
+export interface BackupResult {
+  /** Absolute path of the newly written backup, or null if there was nothing to back up. */
+  backupPath: string | null;
+  /** If a previous backup already existed, the path it was rotated to; otherwise null. */
+  rotatedTo: string | null;
+}
+
+/**
+ * Copy `events.jsonl` to `events.jsonl.bak` so a destructive operation (e.g.
+ * `scan --clear`) can be recovered if it fails midway (#180). If a backup
+ * already exists it is rotated to `events.jsonl.bak.bak` rather than silently
+ * overwritten. Returns `{ backupPath: null }` when there is nothing to back up.
+ */
+export function backupEvents(dir = STORE_DIR): Promise<BackupResult> {
+  return enqueueWrite(dir, async () => {
+    const eventsPath = join(dir, "events.jsonl");
+    const bakPath = join(dir, "events.jsonl.bak");
+    const bakBakPath = join(dir, "events.jsonl.bak.bak");
+
+    let content: string;
+    try {
+      content = await readFile(eventsPath, "utf-8");
+    } catch {
+      // No store file yet — nothing to back up.
+      return { backupPath: null, rotatedTo: null };
+    }
+
+    await ensureStoreDir(dir);
+
+    // Preserve an existing backup instead of overwriting it.
+    let rotatedTo: string | null = null;
+    try {
+      const prev = await readFile(bakPath, "utf-8");
+      await writeFile(bakBakPath, prev, "utf-8");
+      rotatedTo = bakBakPath;
+    } catch {
+      // No existing backup to rotate.
+    }
+
+    await writeFile(bakPath, content, "utf-8");
+    return { backupPath: bakPath, rotatedTo };
+  });
+}
+
 /** Remove events whose timestamp is older than `beforeIso` (ISO string).
  *  Returns counts of removed and kept events. */
 export function pruneEvents(
