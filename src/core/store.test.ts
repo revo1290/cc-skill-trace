@@ -4,7 +4,8 @@ import { appendFile } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendEvent, readEvents, clearEvents, pruneEvents } from "./store.js";
+import { readFile } from "node:fs/promises";
+import { appendEvent, readEvents, clearEvents, pruneEvents, backupEvents, pendingWriteQueueCount } from "./store.js";
 import type { SkillInvocationEvent } from "./types.js";
 
 function makeEvent(overrides: Partial<SkillInvocationEvent> = {}): SkillInvocationEvent {
@@ -93,6 +94,43 @@ describe("store", () => {
     });
   });
 
+  describe("write queue lifecycle (#169)", () => {
+    it("releases the Map entry once writes to a dir have drained", async () => {
+      const qDir = dir + "-queue-release";
+      await appendEvent(makeEvent({ id: "q1" }), qDir);
+      await appendEvent(makeEvent({ id: "q2" }), qDir);
+      // Allow the trailing .finally cleanup (a microtask past settlement) to run.
+      await Promise.resolve();
+      await new Promise((r) => setImmediate(r));
+      assert.equal(pendingWriteQueueCount(), 0);
+    });
+
+    it("does not leak an entry per distinct dir", async () => {
+      const dirs = Array.from({ length: 20 }, (_, i) => `${dir}-leak-${i}`);
+      await Promise.all(dirs.map((d) => appendEvent(makeEvent({ id: "x" }), d)));
+      await new Promise((r) => setImmediate(r));
+      assert.equal(pendingWriteQueueCount(), 0);
+    });
+
+    it("still serializes concurrent writes to the same dir in order", async () => {
+      const sDir = dir + "-serialize";
+      await clearEvents(sDir);
+      // Fire many appends without awaiting between them — they must not interleave.
+      await Promise.all(
+        Array.from({ length: 25 }, (_, i) =>
+          appendEvent(makeEvent({ id: `s-${i}`, timestamp: `2026-01-01T00:00:00.${String(i).padStart(3, "0")}Z` }), sDir)
+        )
+      );
+      const events = await readEvents(sDir);
+      assert.equal(events.length, 25);
+      // Every line parsed cleanly and all 25 ids are present (no torn/interleaved writes).
+      assert.deepEqual(
+        [...events.map((e) => e.id)].sort(),
+        Array.from({ length: 25 }, (_, i) => `s-${i}`).sort()
+      );
+    });
+  });
+
   describe("clearEvents", () => {
     it("empties the store", async () => {
       await appendEvent(makeEvent(), dir);
@@ -106,6 +144,61 @@ describe("store", () => {
       await clearEvents(dir);
       const events = await readEvents(dir);
       assert.deepEqual(events, []);
+    });
+  });
+
+  describe("backupEvents (#180)", () => {
+    it("returns null backupPath when there is no store file", async () => {
+      const bDir = dir + "-backup-none";
+      const result = await backupEvents(bDir);
+      assert.equal(result.backupPath, null);
+      assert.equal(result.rotatedTo, null);
+    });
+
+    it("copies events.jsonl to events.jsonl.bak", async () => {
+      const bDir = dir + "-backup-basic";
+      await appendEvent(makeEvent({ id: "keep-1" }), bDir);
+      await appendEvent(makeEvent({ id: "keep-2" }), bDir);
+
+      const result = await backupEvents(bDir);
+      assert.equal(result.backupPath, join(bDir, "events.jsonl.bak"));
+      assert.equal(result.rotatedTo, null);
+
+      const original = await readFile(join(bDir, "events.jsonl"), "utf-8");
+      const backup = await readFile(join(bDir, "events.jsonl.bak"), "utf-8");
+      assert.equal(backup, original);
+    });
+
+    it("preserves the store contents even after a subsequent clear", async () => {
+      const bDir = dir + "-backup-then-clear";
+      await appendEvent(makeEvent({ id: "history" }), bDir);
+
+      await backupEvents(bDir);
+      await clearEvents(bDir);
+
+      // Store is empty, but the backup still holds the original event.
+      assert.deepEqual(await readEvents(bDir), []);
+      const backup = await readFile(join(bDir, "events.jsonl.bak"), "utf-8");
+      assert.match(backup, /"id":"history"/);
+    });
+
+    it("rotates an existing backup to .bak.bak instead of overwriting it", async () => {
+      const bDir = dir + "-backup-rotate";
+      await appendEvent(makeEvent({ id: "gen-1" }), bDir);
+      const first = await backupEvents(bDir);
+      assert.equal(first.rotatedTo, null);
+
+      // New state, second backup should rotate the previous one.
+      await appendEvent(makeEvent({ id: "gen-2" }), bDir);
+      const second = await backupEvents(bDir);
+      assert.equal(second.rotatedTo, join(bDir, "events.jsonl.bak.bak"));
+
+      const rotated = await readFile(join(bDir, "events.jsonl.bak.bak"), "utf-8");
+      assert.match(rotated, /"id":"gen-1"/);
+      assert.doesNotMatch(rotated, /"id":"gen-2"/);
+
+      const current = await readFile(join(bDir, "events.jsonl.bak"), "utf-8");
+      assert.match(current, /"id":"gen-2"/);
     });
   });
 

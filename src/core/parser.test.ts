@@ -1,9 +1,9 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractInvocationsFromFile } from "./parser.js";
+import { extractInvocationsFromFile, extractAllInvocations, isClaudeSessionFile } from "./parser.js";
 
 function jsonl(entries: object[]): string {
   return entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
@@ -129,6 +129,27 @@ describe("extractInvocationsFromFile", () => {
     assert.ok((events[0].triggerMessage?.length ?? 0) <= 300);
   });
 
+  it("skips non-Claude JSONL files that happen to live under the scan dir (#171)", async () => {
+    const file = join(dir, "analytics.jsonl");
+    // A user's own JSONL data set — valid JSON, but not a Claude session log.
+    await writeFile(file, jsonl([
+      { event: "pageview", url: "/home", ts: 123 },
+      { event: "click", target: "button", ts: 124 },
+    ]));
+    const events = await extractInvocationsFromFile(file);
+    assert.equal(events.length, 0);
+  });
+
+  it("isClaudeSessionFile detects session logs and rejects unrelated JSONL (#171)", async () => {
+    const sessionFile = join(dir, "detect-session.jsonl");
+    await writeFile(sessionFile, jsonl([userMsg("hi"), assistantSkill("pdf")]));
+    assert.equal(await isClaudeSessionFile(sessionFile), true);
+
+    const otherFile = join(dir, "detect-other.jsonl");
+    await writeFile(otherFile, jsonl([{ event: "pageview", url: "/home" }]));
+    assert.equal(await isClaudeSessionFile(otherFile), false);
+  });
+
   it("populates injectedTokens from the following tool_result content (#34)", async () => {
     const file = join(dir, "injected-tokens.jsonl");
     const skillContent = "# My Skill\n" + "word ".repeat(80); // ~400 chars → ~100 tokens
@@ -157,5 +178,59 @@ describe("extractInvocationsFromFile", () => {
     assert.equal(events.length, 1);
     assert.ok(events[0].injectedTokens != null, "injectedTokens should be populated");
     assert.ok((events[0].injectedTokens ?? 0) > 0, "injectedTokens should be positive");
+  });
+});
+
+describe("extractAllInvocations sessionId filtering (#188)", () => {
+  let projectsDir: string;
+  const prev = process.env["CC_PROJECTS_DIR"];
+
+  before(async () => {
+    projectsDir = await mkdtemp(join(tmpdir(), "cc-skill-trace-scan-test-"));
+    process.env["CC_PROJECTS_DIR"] = projectsDir;
+    const proj = join(projectsDir, "some-project");
+    await mkdir(proj, { recursive: true });
+    // Two session files named after their session IDs (Claude Code convention).
+    await writeFile(
+      join(proj, "sess-A.jsonl"),
+      jsonl([userMsg("help A", "2026-01-01T00:00:00.000Z", "sess-A"),
+        assistantSkill("pdf", "2026-01-01T00:00:01.000Z", "sess-A")])
+    );
+    await writeFile(
+      join(proj, "sess-B.jsonl"),
+      jsonl([userMsg("help B", "2026-01-02T00:00:00.000Z", "sess-B"),
+        assistantSkill("docx", "2026-01-02T00:00:01.000Z", "sess-B")])
+    );
+    // A file NOT named after its session ID — exercises the fallback path.
+    await writeFile(
+      join(proj, "renamed.jsonl"),
+      jsonl([userMsg("help C", "2026-01-03T00:00:00.000Z", "sess-C"),
+        assistantSkill("csv", "2026-01-03T00:00:01.000Z", "sess-C")])
+    );
+  });
+
+  after(async () => {
+    if (prev === undefined) delete process.env["CC_PROJECTS_DIR"];
+    else process.env["CC_PROJECTS_DIR"] = prev;
+    await rm(projectsDir, { recursive: true, force: true });
+  });
+
+  it("returns only events for the requested session (fast path by filename)", async () => {
+    const events = await extractAllInvocations({ sessionId: "sess-A" });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].sessionId, "sess-A");
+    assert.equal(events[0].skillName, "pdf");
+  });
+
+  it("returns all sessions when no sessionId filter is given", async () => {
+    const events = await extractAllInvocations();
+    assert.deepEqual(events.map((e) => e.sessionId).sort(), ["sess-A", "sess-B", "sess-C"]);
+  });
+
+  it("falls back to a full scan when no file name matches the sessionId", async () => {
+    const events = await extractAllInvocations({ sessionId: "sess-C" });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].sessionId, "sess-C");
+    assert.equal(events[0].skillName, "csv");
   });
 });
