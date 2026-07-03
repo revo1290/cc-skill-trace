@@ -104,7 +104,7 @@ async function* readJsonlFile(filePath: string): AsyncGenerator<SessionLogEntry>
   }
 }
 
-async function findAllSessionFiles(): Promise<string[]> {
+async function findAllSessionFiles(sessionId?: string): Promise<string[]> {
   const files: string[] = [];
   let projectDirs: string[];
   try {
@@ -119,9 +119,12 @@ async function findAllSessionFiles(): Promise<string[]> {
       if (!s.isDirectory()) continue;
       const sessionFiles = await readdir(projectPath);
       for (const f of sessionFiles) {
-        if (f.endsWith(".jsonl")) {
-          files.push(join(projectPath, f));
-        }
+        if (!f.endsWith(".jsonl")) continue;
+        // Fast path: Claude Code names session files "<sessionId>.jsonl", so when
+        // filtering by session we can skip unrelated files by name instead of
+        // reading and parsing every session file. (#188)
+        if (sessionId && basename(f, ".jsonl") !== sessionId) continue;
+        files.push(join(projectPath, f));
       }
     } catch {
       // skip unreadable dirs
@@ -256,7 +259,13 @@ export async function extractAllInvocations(
     onProgress?: (done: number, total: number) => void;
   } = {}
 ): Promise<SkillInvocationEvent[]> {
-  const files = await findAllSessionFiles();
+  let files = await findAllSessionFiles(opts.sessionId);
+  // Fallback: if a session filter matched no files by name (e.g. Claude Code's
+  // file-naming convention changed), scan everything so the post-read sessionId
+  // filter below can still recover the session. (#188)
+  if (opts.sessionId && files.length === 0) {
+    files = await findAllSessionFiles();
+  }
   const allEvents: SkillInvocationEvent[] = [];
   let done = 0;
 
