@@ -48,7 +48,7 @@
     "lint:fix": "biome lint src --write",
     "format": "biome format src --write",
     "format:check": "biome format src",
-    "test": "node --import tsx/esm --test src/core/store.test.ts src/core/parser.test.ts src/core/utils.test.ts src/cli/format.test.ts src/cli/duration.test.ts src/cli/follow.test.ts src/cli/skill-md.test.ts",
+    "test": "node --import tsx/esm --test src/core/store.test.ts src/core/parser.test.ts src/core/utils.test.ts src/cli/format.test.ts src/cli/duration.test.ts src/cli/follow.test.ts src/cli/skill-md.test.ts src/cli/atomic-write.test.ts",
     "prepare": "npm run build",
     "prepublishOnly": "npm run typecheck && npm run lint && npm test"
   },

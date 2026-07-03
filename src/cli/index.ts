@@ -12,7 +12,7 @@ if (_nodeMajor < 18) {
 
 import { program } from "commander";
 import chalk from "chalk";
-import { readFile, writeFile, rename, copyFile as fsCopyFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -28,6 +28,7 @@ import {
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
 import { renderDashboard, renderCompact, renderTerse, renderStats, buildStats } from "./format.js";
+import { writeSettingsAtomic } from "./atomic-write.js";
 import { normalizeSkillMd, skillMdChanged } from "./skill-md.js";
 import { skipWhileRunning } from "./follow.js";
 import { parseDuration } from "./duration.js";
@@ -64,25 +65,6 @@ function validateDateRange(since: string | undefined, before: string | undefined
     console.error(chalk.red(`✗  --since (${since}) must be earlier than --before (${before})`));
     process.exit(1);
   }
-}
-
-/**
- * Atomically write JSON to `path`:
- *  1. Back up the current file as `<path>.bak` (best-effort)
- *  2. Write new content to `<path>.tmp`
- *  3. Rename tmp → path  (atomic on POSIX; best-effort on Windows)
- */
-async function writeSettingsAtomic(path: string, data: unknown): Promise<void> {
-  const json = JSON.stringify(data, null, 2);
-  const tmp = path + ".tmp";
-  // Best-effort backup — don't fail if the original doesn't exist yet
-  try {
-    await fsCopyFile(path, path + ".bak");
-  } catch {
-    /* no original yet */
-  }
-  await writeFile(tmp, json, "utf-8");
-  await rename(tmp, path);
 }
 
 function scanProgress(done: number, total: number): void {
