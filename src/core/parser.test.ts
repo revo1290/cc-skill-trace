@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractInvocationsFromFile } from "./parser.js";
+import { extractInvocationsFromFile, isClaudeSessionFile } from "./parser.js";
 
 function jsonl(entries: object[]): string {
   return entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
@@ -127,6 +127,27 @@ describe("extractInvocationsFromFile", () => {
     const events = await extractInvocationsFromFile(file);
     assert.equal(events.length, 1);
     assert.ok((events[0].triggerMessage?.length ?? 0) <= 300);
+  });
+
+  it("skips non-Claude JSONL files that happen to live under the scan dir (#171)", async () => {
+    const file = join(dir, "analytics.jsonl");
+    // A user's own JSONL data set — valid JSON, but not a Claude session log.
+    await writeFile(file, jsonl([
+      { event: "pageview", url: "/home", ts: 123 },
+      { event: "click", target: "button", ts: 124 },
+    ]));
+    const events = await extractInvocationsFromFile(file);
+    assert.equal(events.length, 0);
+  });
+
+  it("isClaudeSessionFile detects session logs and rejects unrelated JSONL (#171)", async () => {
+    const sessionFile = join(dir, "detect-session.jsonl");
+    await writeFile(sessionFile, jsonl([userMsg("hi"), assistantSkill("pdf")]));
+    assert.equal(await isClaudeSessionFile(sessionFile), true);
+
+    const otherFile = join(dir, "detect-other.jsonl");
+    await writeFile(otherFile, jsonl([{ event: "pageview", url: "/home" }]));
+    assert.equal(await isClaudeSessionFile(otherFile), false);
   });
 
   it("populates injectedTokens from the following tool_result content (#34)", async () => {
