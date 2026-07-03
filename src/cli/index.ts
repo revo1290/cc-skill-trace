@@ -29,6 +29,7 @@ import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
 import { renderDashboard, renderCompact, renderTerse, renderStats, buildStats } from "./format.js";
 import { parseDuration } from "./duration.js";
+import { isCcSkillTraceHook } from "./hooks.js";
 
 const _require = createRequire(import.meta.url);
 const VERSION = (_require("../../package.json") as { version: string }).version;
@@ -154,7 +155,7 @@ program
     const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
     const preToolUse = (hooks.PreToolUse ?? []) as Array<Record<string, unknown>>;
 
-    if (preToolUse.some((h) => JSON.stringify(h).includes("cc-skill-trace"))) {
+    if (preToolUse.some(isCcSkillTraceHook)) {
       console.log(chalk.gray("  Hook already registered → " + settingsPath));
     } else {
       preToolUse.push({
@@ -616,7 +617,7 @@ program
 
     const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
     const preToolUse = (hooks.PreToolUse ?? []) as Array<Record<string, unknown>>;
-    const filtered = preToolUse.filter((h) => !JSON.stringify(h).includes("cc-skill-trace"));
+    const filtered = preToolUse.filter((h) => !isCcSkillTraceHook(h));
 
     if (filtered.length === preToolUse.length) {
       console.log(chalk.yellow("⚠  Hook not found in: " + settingsPath));
