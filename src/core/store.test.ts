@@ -4,7 +4,8 @@ import { appendFile } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendEvent, readEvents, clearEvents, pruneEvents } from "./store.js";
+import { readFile } from "node:fs/promises";
+import { appendEvent, readEvents, clearEvents, pruneEvents, backupEvents } from "./store.js";
 import type { SkillInvocationEvent } from "./types.js";
 
 function makeEvent(overrides: Partial<SkillInvocationEvent> = {}): SkillInvocationEvent {
@@ -106,6 +107,61 @@ describe("store", () => {
       await clearEvents(dir);
       const events = await readEvents(dir);
       assert.deepEqual(events, []);
+    });
+  });
+
+  describe("backupEvents (#180)", () => {
+    it("returns null backupPath when there is no store file", async () => {
+      const bDir = dir + "-backup-none";
+      const result = await backupEvents(bDir);
+      assert.equal(result.backupPath, null);
+      assert.equal(result.rotatedTo, null);
+    });
+
+    it("copies events.jsonl to events.jsonl.bak", async () => {
+      const bDir = dir + "-backup-basic";
+      await appendEvent(makeEvent({ id: "keep-1" }), bDir);
+      await appendEvent(makeEvent({ id: "keep-2" }), bDir);
+
+      const result = await backupEvents(bDir);
+      assert.equal(result.backupPath, join(bDir, "events.jsonl.bak"));
+      assert.equal(result.rotatedTo, null);
+
+      const original = await readFile(join(bDir, "events.jsonl"), "utf-8");
+      const backup = await readFile(join(bDir, "events.jsonl.bak"), "utf-8");
+      assert.equal(backup, original);
+    });
+
+    it("preserves the store contents even after a subsequent clear", async () => {
+      const bDir = dir + "-backup-then-clear";
+      await appendEvent(makeEvent({ id: "history" }), bDir);
+
+      await backupEvents(bDir);
+      await clearEvents(bDir);
+
+      // Store is empty, but the backup still holds the original event.
+      assert.deepEqual(await readEvents(bDir), []);
+      const backup = await readFile(join(bDir, "events.jsonl.bak"), "utf-8");
+      assert.match(backup, /"id":"history"/);
+    });
+
+    it("rotates an existing backup to .bak.bak instead of overwriting it", async () => {
+      const bDir = dir + "-backup-rotate";
+      await appendEvent(makeEvent({ id: "gen-1" }), bDir);
+      const first = await backupEvents(bDir);
+      assert.equal(first.rotatedTo, null);
+
+      // New state, second backup should rotate the previous one.
+      await appendEvent(makeEvent({ id: "gen-2" }), bDir);
+      const second = await backupEvents(bDir);
+      assert.equal(second.rotatedTo, join(bDir, "events.jsonl.bak.bak"));
+
+      const rotated = await readFile(join(bDir, "events.jsonl.bak.bak"), "utf-8");
+      assert.match(rotated, /"id":"gen-1"/);
+      assert.doesNotMatch(rotated, /"id":"gen-2"/);
+
+      const current = await readFile(join(bDir, "events.jsonl.bak"), "utf-8");
+      assert.match(current, /"id":"gen-2"/);
     });
   });
 
