@@ -12,16 +12,26 @@ if (_nodeMajor < 18) {
 
 import { program } from "commander";
 import chalk from "chalk";
-import { readFile, writeFile, copyFile as fsCopyFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { readEvents, clearEvents, appendEvent, pruneEvents } from "../core/store.js";
+import {
+  readEvents,
+  clearEvents,
+  appendEvent,
+  pruneEvents,
+  backupEvents,
+  EVENTS_FILE,
+} from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
 import { renderDashboard, renderCompact, renderTerse, renderStats, buildStats } from "./format.js";
 import { writeSettingsAtomic } from "./atomic-write.js";
+import { normalizeSkillMd, skillMdChanged } from "./skill-md.js";
+import { skipWhileRunning } from "./follow.js";
+import { parseDuration } from "./duration.js";
 
 const _require = createRequire(import.meta.url);
 const VERSION = (_require("../../package.json") as { version: string }).version;
@@ -79,21 +89,6 @@ async function scanAndMerge(opts: {
   return { events, imported };
 }
 
-function parseDuration(value: string): Date {
-  const match = /^(\d+)(h|d|w)$/i.exec(value);
-  if (!match) {
-    console.error(chalk.red(`✗  Invalid duration: "${value}". Expected format: 12h, 30d, or 4w`));
-    process.exit(1);
-  }
-  const n = parseInt(match[1]!, 10);
-  const unit = match[2]!.toLowerCase();
-  const cutoff = new Date();
-  if (unit === "h") cutoff.setHours(cutoff.getHours() - n);
-  else if (unit === "d") cutoff.setDate(cutoff.getDate() - n);
-  else cutoff.setDate(cutoff.getDate() - n * 7);
-  return cutoff;
-}
-
 program
   .name("cc-skill-trace")
   .description("Skill invocation debugger & visualizer for Claude Code")
@@ -116,7 +111,7 @@ async function isSkillMdStale(): Promise<boolean> {
       readFile(installedSkillMdPath, "utf-8"),
       readFile(await bundledSkillMdPath(), "utf-8"),
     ]);
-    return installed !== bundled;
+    return skillMdChanged(installed, bundled);
   } catch {
     return false;
   }
@@ -164,11 +159,13 @@ program
       const bundled = await readFile(skillSrc, "utf-8");
       const installed = await readFile(installedSkillMdPath, "utf-8").catch(() => null);
       await mkdir(skillDir, { recursive: true });
-      await fsCopyFile(skillSrc, installedSkillMdPath);
+      // Write with LF-normalized content so a Windows CRLF checkout of the bundled
+      // file doesn't leave the installed copy looking permanently stale (#181).
+      await writeFile(installedSkillMdPath, normalizeSkillMd(bundled), "utf-8");
       if (installed === null) {
         console.log(chalk.green("✓  Skill installed   → " + skillDir));
         console.log(chalk.gray("  Use /skill-trace inside Claude Code to open the dashboard."));
-      } else if (installed !== bundled) {
+      } else if (skillMdChanged(installed, bundled)) {
         console.log(chalk.green("✓  SKILL.md updated  → " + skillDir));
         console.log(chalk.gray("  Restart Claude Code to apply the updated skill definition."));
       } else {
@@ -314,8 +311,13 @@ program
             "  \r"
         );
       };
-      await tick();
-      const interval = setInterval(tick, 2000);
+      // Guard against overlapping ticks: if a tick takes longer than the
+      // interval (large events.jsonl / slow FS), setInterval would otherwise
+      // start the next one before the previous finished, interleaving stdout
+      // writes and garbling the output (#186).
+      const guardedTick = skipWhileRunning(tick);
+      await guardedTick();
+      const interval = setInterval(guardedTick, 2000);
       const cleanup = () => {
         clearInterval(interval);
         process.stdout.write("\n");
@@ -351,6 +353,15 @@ program
   .action(async (opts) => {
     validateDateRange(opts.since, opts.before);
     if (opts.clear) {
+      // Back up before clearing so a mid-scan failure can't destroy history (#180).
+      const { backupPath, rotatedTo } = await backupEvents();
+      if (backupPath) {
+        if (rotatedTo) {
+          console.log(chalk.gray(`  Previous backup moved to ${rotatedTo}`));
+        }
+        console.log(chalk.gray(`  Backup saved to ${backupPath}`));
+        console.log(chalk.gray(`  To restore: cp ${backupPath} ${EVENTS_FILE}`));
+      }
       await clearEvents();
       console.log(chalk.gray("  Cleared."));
     }
@@ -420,7 +431,7 @@ program
 program
   .command("clear")
   .description("Clear all captured events")
-  .option("--older-than <duration>", "Remove events older than this (e.g. 12h, 30d, 4w)")
+  .option("--older-than <duration>", "Remove events older than this (e.g. 30min, 12h, 30d, 4w)")
   .action(async (opts) => {
     if (opts.olderThan) {
       const cutoff = parseDuration(String(opts.olderThan));
