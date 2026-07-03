@@ -24,14 +24,29 @@ function enqueueWrite<T = void>(dir: string, fn: () => Promise<T>): Promise<T> {
     () => fn()
   );
   // Store a void chain so the queue type stays consistent
-  writeQueues.set(
-    dir,
-    next.then(
-      () => {},
-      () => {}
-    )
+  const tail = next.then(
+    () => {},
+    () => {}
   );
+  writeQueues.set(dir, tail);
+  // Release the Map entry once this write settles, but only if no newer write
+  // has been enqueued in the meantime (i.e. `tail` is still the current tail).
+  // Otherwise entries grow unbounded — one per distinct dir kept alive for the
+  // whole process lifetime (#169: --follow, programmatic API, many-dir tests).
+  void tail.finally(() => {
+    if (writeQueues.get(dir) === tail) {
+      writeQueues.delete(dir);
+    }
+  });
   return next;
+}
+
+/**
+ * Number of store directories with an in-flight (or not-yet-released) write
+ * queue. Intended for tests/diagnostics — a healthy idle store settles to 0.
+ */
+export function pendingWriteQueueCount(): number {
+  return writeQueues.size;
 }
 
 // ─── Read options ────────────────────────────────────────────────────────────
@@ -111,6 +126,50 @@ export function clearEvents(dir = STORE_DIR): Promise<void> {
   return enqueueWrite(dir, async () => {
     await ensureStoreDir(dir);
     await writeFile(join(dir, "events.jsonl"), "", "utf-8");
+  });
+}
+
+export interface BackupResult {
+  /** Absolute path of the newly written backup, or null if there was nothing to back up. */
+  backupPath: string | null;
+  /** If a previous backup already existed, the path it was rotated to; otherwise null. */
+  rotatedTo: string | null;
+}
+
+/**
+ * Copy `events.jsonl` to `events.jsonl.bak` so a destructive operation (e.g.
+ * `scan --clear`) can be recovered if it fails midway (#180). If a backup
+ * already exists it is rotated to `events.jsonl.bak.bak` rather than silently
+ * overwritten. Returns `{ backupPath: null }` when there is nothing to back up.
+ */
+export function backupEvents(dir = STORE_DIR): Promise<BackupResult> {
+  return enqueueWrite(dir, async () => {
+    const eventsPath = join(dir, "events.jsonl");
+    const bakPath = join(dir, "events.jsonl.bak");
+    const bakBakPath = join(dir, "events.jsonl.bak.bak");
+
+    let content: string;
+    try {
+      content = await readFile(eventsPath, "utf-8");
+    } catch {
+      // No store file yet — nothing to back up.
+      return { backupPath: null, rotatedTo: null };
+    }
+
+    await ensureStoreDir(dir);
+
+    // Preserve an existing backup instead of overwriting it.
+    let rotatedTo: string | null = null;
+    try {
+      const prev = await readFile(bakPath, "utf-8");
+      await writeFile(bakBakPath, prev, "utf-8");
+      rotatedTo = bakBakPath;
+    } catch {
+      // No existing backup to rotate.
+    }
+
+    await writeFile(bakPath, content, "utf-8");
+    return { backupPath: bakPath, rotatedTo };
   });
 }
 

@@ -17,11 +17,19 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { readEvents, clearEvents, appendEvent, pruneEvents } from "../core/store.js";
+import {
+  readEvents,
+  clearEvents,
+  appendEvent,
+  pruneEvents,
+  backupEvents,
+  EVENTS_FILE,
+} from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
 import { renderDashboard, renderCompact, renderTerse, renderStats, buildStats } from "./format.js";
 import { skipWhileRunning } from "./follow.js";
+import { parseDuration } from "./duration.js";
 
 const _require = createRequire(import.meta.url);
 const VERSION = (_require("../../package.json") as { version: string }).version;
@@ -96,21 +104,6 @@ async function scanAndMerge(opts: {
     }
   }
   return { events, imported };
-}
-
-function parseDuration(value: string): Date {
-  const match = /^(\d+)(h|d|w)$/i.exec(value);
-  if (!match) {
-    console.error(chalk.red(`✗  Invalid duration: "${value}". Expected format: 12h, 30d, or 4w`));
-    process.exit(1);
-  }
-  const n = parseInt(match[1]!, 10);
-  const unit = match[2]!.toLowerCase();
-  const cutoff = new Date();
-  if (unit === "h") cutoff.setHours(cutoff.getHours() - n);
-  else if (unit === "d") cutoff.setDate(cutoff.getDate() - n);
-  else cutoff.setDate(cutoff.getDate() - n * 7);
-  return cutoff;
 }
 
 program
@@ -375,6 +368,15 @@ program
   .action(async (opts) => {
     validateDateRange(opts.since, opts.before);
     if (opts.clear) {
+      // Back up before clearing so a mid-scan failure can't destroy history (#180).
+      const { backupPath, rotatedTo } = await backupEvents();
+      if (backupPath) {
+        if (rotatedTo) {
+          console.log(chalk.gray(`  Previous backup moved to ${rotatedTo}`));
+        }
+        console.log(chalk.gray(`  Backup saved to ${backupPath}`));
+        console.log(chalk.gray(`  To restore: cp ${backupPath} ${EVENTS_FILE}`));
+      }
       await clearEvents();
       console.log(chalk.gray("  Cleared."));
     }
@@ -444,7 +446,7 @@ program
 program
   .command("clear")
   .description("Clear all captured events")
-  .option("--older-than <duration>", "Remove events older than this (e.g. 12h, 30d, 4w)")
+  .option("--older-than <duration>", "Remove events older than this (e.g. 30min, 12h, 30d, 4w)")
   .action(async (opts) => {
     if (opts.olderThan) {
       const cutoff = parseDuration(String(opts.olderThan));
