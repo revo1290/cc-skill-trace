@@ -12,7 +12,7 @@ if (_nodeMajor < 18) {
 
 import { program } from "commander";
 import chalk from "chalk";
-import { readFile, writeFile, rename, copyFile as fsCopyFile } from "node:fs/promises";
+import { readFile, writeFile, rename, copyFile as fsCopyFile, access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -122,7 +122,21 @@ async function bundledSkillMdPath(): Promise<string> {
   const { fileURLToPath } = await import("node:url");
   const { dirname } = await import("node:path");
   const here = dirname(fileURLToPath(import.meta.url));
-  return join(here, "..", "skill", "SKILL.md");
+  // Primary: dist/skill/SKILL.md, copied by the build step. Fallback: the source
+  // copy shipped in the package (`files` includes src/skill/SKILL.md), so a
+  // published build that predates the copy step still resolves instead of
+  // failing with "Skill file not found". (#183)
+  const primary = join(here, "..", "skill", "SKILL.md");
+  const fallback = join(here, "..", "..", "src", "skill", "SKILL.md");
+  for (const candidate of [primary, fallback]) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      // try the next candidate
+    }
+  }
+  return primary;
 }
 
 const installedSkillMdPath = join(homedir(), ".claude", "skills", "skill-trace", "SKILL.md");
