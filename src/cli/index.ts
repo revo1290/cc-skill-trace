@@ -32,6 +32,7 @@ import { writeSettingsAtomic } from "./atomic-write.js";
 import { normalizeSkillMd, skillMdChanged } from "./skill-md.js";
 import { skipWhileRunning } from "./follow.js";
 import { parseDuration } from "./duration.js";
+import { toCsv } from "./csv.js";
 
 const _require = createRequire(import.meta.url);
 const VERSION = (_require("../../package.json") as { version: string }).version;
@@ -488,6 +489,7 @@ program
   .command("export")
   .description("Export captured events as JSON or CSV")
   .option("--format <fmt>", "Output format: json | csv", "json")
+  .option("--no-bom", "Omit the UTF-8 BOM from CSV output (BOM is on by default for Excel)")
   .option("-o, --output <path>", "Output file path (default: stdout)")
   .option("--since <date>", "Filter from this ISO date", validateSince)
   .option("--before <date>", "Filter up to this ISO date", validateSince)
@@ -511,30 +513,8 @@ program
     let out: string;
 
     if (fmt === "csv") {
-      const headers: (keyof (typeof events)[0])[] = [
-        "id",
-        "timestamp",
-        "sessionId",
-        "skillName",
-        "skillArgs",
-        "source",
-        "triggerMessage",
-        "injectedTokens",
-        "cwd",
-        "gitBranch",
-      ];
-      const esc = (v: unknown) => {
-        const s = v == null ? "" : String(v);
-        return s.includes(",") || s.includes('"') || s.includes("\n")
-          ? `"${s.replace(/"/g, '""')}"`
-          : s;
-      };
-      // UTF-8 BOM ensures Excel opens the file without garbling non-ASCII characters
-      out =
-        "\uFEFF" +
-        headers.map((h) => `"${h}"`).join(",") +
-        "\n" +
-        events.map((e) => headers.map((h) => esc(e[h])).join(",")).join("\n");
+      // `--no-bom` sets opts.bom to false; BOM stays on by default for Excel.
+      out = toCsv(events, { bom: opts.bom as boolean });
     } else if (fmt === "json") {
       out = JSON.stringify(events, null, 2);
     } else {
