@@ -28,6 +28,7 @@ import {
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
 import { renderDashboard, renderCompact, renderTerse, renderStats, buildStats } from "./format.js";
+import { skipWhileRunning } from "./follow.js";
 import { parseDuration } from "./duration.js";
 
 const _require = createRequire(import.meta.url);
@@ -325,8 +326,13 @@ program
             "  \r"
         );
       };
-      await tick();
-      const interval = setInterval(tick, 2000);
+      // Guard against overlapping ticks: if a tick takes longer than the
+      // interval (large events.jsonl / slow FS), setInterval would otherwise
+      // start the next one before the previous finished, interleaving stdout
+      // writes and garbling the output (#186).
+      const guardedTick = skipWhileRunning(tick);
+      await guardedTick();
+      const interval = setInterval(guardedTick, 2000);
       const cleanup = () => {
         clearInterval(interval);
         process.stdout.write("\n");
