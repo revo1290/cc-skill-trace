@@ -1,10 +1,11 @@
 import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { appendFile } from "node:fs/promises";
-import { mkdtemp, rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { appendFile, mkdtemp, open, rm, readFile, utimes, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { appendEvent, readEvents, clearEvents, pruneEvents, backupEvents, pendingWriteQueueCount } from "./store.js";
 import type { SkillInvocationEvent } from "./types.js";
 
@@ -199,6 +200,92 @@ describe("store", () => {
 
       const current = await readFile(join(bDir, "events.jsonl.bak"), "utf-8");
       assert.match(current, /"id":"gen-2"/);
+    });
+  });
+
+  describe("cross-process concurrency (#161)", () => {
+    const lockFile = (d: string) => join(d, "events.jsonl.lock");
+
+    it("appendEvent still records the event when another process holds the lock (never blocks)", async () => {
+      const cDir = dir + "-lock-held";
+      await clearEvents(cDir);
+      // Simulate a live external holder by creating a fresh lock file.
+      const held = await open(lockFile(cDir), "wx");
+      await held.writeFile("999999 held\n", "utf-8");
+      await held.close();
+
+      // appendEvent must not hang — it falls back to a bare append after a short wait.
+      const started = Date.now();
+      await appendEvent(makeEvent({ id: "under-lock" }), cDir);
+      assert.ok(Date.now() - started < 3000, "append should not block indefinitely");
+
+      const events = await readEvents(cDir);
+      assert.deepEqual(events.map((e) => e.id), ["under-lock"]);
+      await rm(lockFile(cDir), { force: true });
+    });
+
+    it("reclaims a stale lock left behind by a crashed process", async () => {
+      const cDir = dir + "-stale-lock";
+      await clearEvents(cDir);
+      await appendEvent(makeEvent({ id: "before" }), cDir);
+
+      // Leave a lock file whose mtime is well past the staleness window (30s).
+      await writeFile(lockFile(cDir), "12345 crashed\n", "utf-8");
+      const longAgo = new Date(Date.parse("2020-01-01T00:00:00.000Z"));
+      await utimes(lockFile(cDir), longAgo, longAgo);
+
+      // A whole-file rewrite must reclaim the stale lock rather than time out.
+      await pruneEvents("1970-01-01T00:00:00.000Z", cDir);
+      assert.equal(existsSync(lockFile(cDir)), false, "stale lock should be removed");
+      const events = await readEvents(cDir);
+      assert.deepEqual(events.map((e) => e.id), ["before"]);
+    });
+
+    it("does not lose appends when many processes write concurrently", async () => {
+      const cDir = dir + "-multiproc";
+      await clearEvents(cDir);
+
+      const storeUrl = new URL("./store.ts", import.meta.url).href;
+      const workerPath = join(cDir, "..", "cc-skill-trace-append-worker.mjs");
+      await writeFile(
+        workerPath,
+        `const [storeUrl, dir, eventJson] = process.argv.slice(2);\n` +
+          `const { appendEvent } = await import(storeUrl);\n` +
+          `await appendEvent(JSON.parse(eventJson), dir);\n`,
+        "utf-8"
+      );
+
+      const N = 12;
+      const spawnAppend = (i: number): Promise<number> =>
+        new Promise((resolve, reject) => {
+          const ev = makeEvent({
+            id: `proc-${i}`,
+            timestamp: `2026-02-01T00:00:00.${String(i).padStart(3, "0")}Z`,
+          });
+          const child = spawn(
+            process.execPath,
+            ["--import", "tsx/esm", workerPath, storeUrl, cDir, JSON.stringify(ev)],
+            { stdio: "ignore" }
+          );
+          child.on("error", reject);
+          child.on("exit", (code) => resolve(code ?? 0));
+        });
+
+      const codes = await Promise.all(Array.from({ length: N }, (_, i) => spawnAppend(i)));
+      assert.ok(codes.every((c) => c === 0), "all worker processes should exit cleanly");
+
+      // Read the raw file: every line must be valid JSON (no torn/interleaved writes)
+      // and all N events must be present (no lost appends).
+      const raw = await readFile(join(cDir, "events.jsonl"), "utf-8");
+      const lines = raw.split("\n").filter((l) => l.trim());
+      for (const line of lines) {
+        assert.doesNotThrow(() => JSON.parse(line), `line should be valid JSON: ${line}`);
+      }
+      const ids = (await readEvents(cDir)).map((e) => e.id).sort();
+      assert.deepEqual(
+        ids,
+        Array.from({ length: N }, (_, i) => `proc-${i}`).sort()
+      );
     });
   });
 

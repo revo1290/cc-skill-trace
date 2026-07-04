@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SkillInvocationEvent } from "./types.js";
@@ -8,6 +8,101 @@ export const EVENTS_FILE = join(STORE_DIR, "events.jsonl");
 
 export async function ensureStoreDir(dir = STORE_DIR): Promise<void> {
   await mkdir(dir, { recursive: true });
+}
+
+// ─── Cross-process file lock ─────────────────────────────────────────────────
+// The in-process write queue (below) only serializes writes within a *single*
+// process. When Claude Code fires skills in parallel it can spawn several
+// `hook-capture` processes at once, and the user may run `clear`/prune from the
+// CLI while a session is live — all separate OS processes contending for the
+// same events.jsonl. Appends are safe on their own (fs.appendFile opens with
+// O_APPEND, so each small line is written atomically and never interleaves),
+// but the whole-file read-modify-write operations (prune/clear/backup) can
+// silently clobber a concurrent append: they read the file, then overwrite it
+// with the old contents, dropping anything appended in between.
+//
+// We coordinate those operations across processes with an advisory lock built
+// on exclusive file creation (`open(path, "wx")` fails with EEXIST if the lock
+// already exists). A lock file older than LOCK_STALE_MS is presumed to belong
+// to a crashed holder and is reclaimed, so a dead process can never deadlock
+// the store (#161).
+
+const LOCK_STALE_MS = 30_000; // a lock file older than this is treated as abandoned
+const LOCK_POLL_MS = 15; // interval between acquisition attempts while a lock is held
+/** Whole-file rewrites (prune/clear/backup) wait this long before giving up. */
+const LOCK_WAIT_MS = 2_000;
+/**
+ * Appends run on the hook hot path and must never block Claude Code, so they
+ * wait only briefly for the lock and then fall back to a bare (still atomic)
+ * append. Worst case this is no worse than the pre-#161 behaviour.
+ */
+const APPEND_LOCK_WAIT_MS = 250;
+
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+function lockPath(dir: string): string {
+  return join(dir, "events.jsonl.lock");
+}
+
+/**
+ * Try to acquire the cross-process lock for `dir`, waiting up to `maxWaitMs`.
+ * Returns a release function on success, or `null` if the lock could not be
+ * acquired in time (the caller decides whether to fall back or fail).
+ */
+async function acquireFileLock(
+  dir: string,
+  maxWaitMs: number
+): Promise<(() => Promise<void>) | null> {
+  await ensureStoreDir(dir);
+  const path = lockPath(dir);
+  const start = Date.now();
+  for (;;) {
+    try {
+      const handle = await open(path, "wx");
+      await handle.writeFile(`${process.pid} ${new Date().toISOString()}\n`, "utf-8");
+      await handle.close();
+      let released = false;
+      return async () => {
+        if (released) return;
+        released = true;
+        await rm(path, { force: true }).catch(() => {});
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      // Lock is held — reclaim it if it looks abandoned, otherwise wait.
+      try {
+        const st = await stat(path);
+        if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+          await rm(path, { force: true }).catch(() => {});
+          continue; // stale lock cleared — retry immediately
+        }
+      } catch {
+        continue; // lock vanished between open and stat — retry immediately
+      }
+      if (Date.now() - start >= maxWaitMs) return null;
+      await delay(LOCK_POLL_MS);
+    }
+  }
+}
+
+/**
+ * Run `fn` while holding the cross-process lock for `dir`. Throws if the lock
+ * cannot be acquired within `LOCK_WAIT_MS` rather than risk clobbering a
+ * concurrent write. Used for the whole-file rewrite operations.
+ */
+async function withFileLock<T>(dir: string, fn: () => Promise<T>): Promise<T> {
+  const release = await acquireFileLock(dir, LOCK_WAIT_MS);
+  if (!release) {
+    throw new Error(
+      `cc-skill-trace: could not acquire store lock for ${dir} within ${LOCK_WAIT_MS}ms ` +
+        `(a stale ${lockPath(dir)} can be removed manually)`
+    );
+  }
+  try {
+    return await fn();
+  } finally {
+    await release();
+  }
 }
 
 // ─── Write serialization queue ───────────────────────────────────────────────
@@ -74,7 +169,16 @@ export interface ReadEventsOptions {
 export function appendEvent(event: SkillInvocationEvent, dir = STORE_DIR): Promise<void> {
   return enqueueWrite(dir, async () => {
     await ensureStoreDir(dir);
-    await appendFile(join(dir, "events.jsonl"), JSON.stringify(event) + "\n", "utf-8");
+    const line = JSON.stringify(event) + "\n";
+    // Coordinate with a concurrent prune/clear when we can, but never block the
+    // hook: if the lock is contended past APPEND_LOCK_WAIT_MS, fall back to a
+    // bare O_APPEND write (atomic on its own, so appends still never interleave).
+    const release = await acquireFileLock(dir, APPEND_LOCK_WAIT_MS).catch(() => null);
+    try {
+      await appendFile(join(dir, "events.jsonl"), line, "utf-8");
+    } finally {
+      if (release) await release();
+    }
   });
 }
 
@@ -123,10 +227,12 @@ export async function readEvents(
 }
 
 export function clearEvents(dir = STORE_DIR): Promise<void> {
-  return enqueueWrite(dir, async () => {
-    await ensureStoreDir(dir);
-    await writeFile(join(dir, "events.jsonl"), "", "utf-8");
-  });
+  return enqueueWrite(dir, () =>
+    withFileLock(dir, async () => {
+      await ensureStoreDir(dir);
+      await writeFile(join(dir, "events.jsonl"), "", "utf-8");
+    })
+  );
 }
 
 export interface BackupResult {
@@ -143,34 +249,36 @@ export interface BackupResult {
  * overwritten. Returns `{ backupPath: null }` when there is nothing to back up.
  */
 export function backupEvents(dir = STORE_DIR): Promise<BackupResult> {
-  return enqueueWrite(dir, async () => {
-    const eventsPath = join(dir, "events.jsonl");
-    const bakPath = join(dir, "events.jsonl.bak");
-    const bakBakPath = join(dir, "events.jsonl.bak.bak");
+  return enqueueWrite(dir, () =>
+    withFileLock(dir, async () => {
+      const eventsPath = join(dir, "events.jsonl");
+      const bakPath = join(dir, "events.jsonl.bak");
+      const bakBakPath = join(dir, "events.jsonl.bak.bak");
 
-    let content: string;
-    try {
-      content = await readFile(eventsPath, "utf-8");
-    } catch {
-      // No store file yet — nothing to back up.
-      return { backupPath: null, rotatedTo: null };
-    }
+      let content: string;
+      try {
+        content = await readFile(eventsPath, "utf-8");
+      } catch {
+        // No store file yet — nothing to back up.
+        return { backupPath: null, rotatedTo: null };
+      }
 
-    await ensureStoreDir(dir);
+      await ensureStoreDir(dir);
 
-    // Preserve an existing backup instead of overwriting it.
-    let rotatedTo: string | null = null;
-    try {
-      const prev = await readFile(bakPath, "utf-8");
-      await writeFile(bakBakPath, prev, "utf-8");
-      rotatedTo = bakBakPath;
-    } catch {
-      // No existing backup to rotate.
-    }
+      // Preserve an existing backup instead of overwriting it.
+      let rotatedTo: string | null = null;
+      try {
+        const prev = await readFile(bakPath, "utf-8");
+        await writeFile(bakBakPath, prev, "utf-8");
+        rotatedTo = bakBakPath;
+      } catch {
+        // No existing backup to rotate.
+      }
 
-    await writeFile(bakPath, content, "utf-8");
-    return { backupPath: bakPath, rotatedTo };
-  });
+      await writeFile(bakPath, content, "utf-8");
+      return { backupPath: bakPath, rotatedTo };
+    })
+  );
 }
 
 /** Remove events whose timestamp is older than `beforeIso` (ISO string).
@@ -179,13 +287,15 @@ export function pruneEvents(
   beforeIso: string,
   dir = STORE_DIR
 ): Promise<{ removed: number; kept: number }> {
-  return enqueueWrite(dir, async () => {
-    await ensureStoreDir(dir);
-    const events = await readEvents(dir);
-    const kept = events.filter((e) => e.timestamp >= beforeIso);
-    const removed = events.length - kept.length;
-    const content = kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : "");
-    await writeFile(join(dir, "events.jsonl"), content, "utf-8");
-    return { removed, kept: kept.length };
-  });
+  return enqueueWrite(dir, () =>
+    withFileLock(dir, async () => {
+      await ensureStoreDir(dir);
+      const events = await readEvents(dir);
+      const kept = events.filter((e) => e.timestamp >= beforeIso);
+      const removed = events.length - kept.length;
+      const content = kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : "");
+      await writeFile(join(dir, "events.jsonl"), content, "utf-8");
+      return { removed, kept: kept.length };
+    })
+  );
 }

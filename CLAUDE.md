@@ -54,6 +54,7 @@ src/
 - ターミナル出力は box-drawing 文字 + ANSI カラーで視認性を最大化（`format.ts:renderDashboard`）
 - HTML レポートは依存ゼロのスタンドアロンファイル（Chart.js は CDN）
 - イベントストアは JSONL（SQLite は v2 で検討）
+- **並行安全性**（`store.ts`, #161）: `appendEvent` は `fs.appendFile`（O_APPEND）を使い、小さな 1 行の追記はアトミック。複数の `hook-capture` プロセスが同時に追記してもデータは失われない。一方 `clearEvents` / `pruneEvents` / `backupEvents` はファイル全体を read-modify-write するため、プロセス間ロック（`events.jsonl.lock` の排他生成 = `open(path, "wx")`）で直列化する。ロックファイルが `LOCK_STALE_MS`(30s) より古い場合はクラッシュ跡と見なして自動回収するのでデッドロックしない。`appendEvent` はホットパスのためロックを短時間だけ待ち、取れなければ素の追記にフォールバックして Claude Code を絶対にブロックしない。プロセス内の直列化は `writeQueues` プロミスチェーンが担い、プロセス間はこのファイルロックが担う。
 - `CC_DEBUG=1` 環境変数で `hook-capture` のデバッグログを stderr に出力
 - `CC_SCAN_CONCURRENCY` 環境変数でスキャン並列数を変更（デフォルト: 8）
 - `CC_PROJECTS_DIR` 環境変数でスキャン対象ディレクトリを変更（先頭の `~/` はホームディレクトリに展開される）
