@@ -28,7 +28,12 @@ import {
 } from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
-import { computeSkillMdStale, normalizeSkillMd, skillMdChanged, type ReadResult } from "./skill-md.js";
+import {
+  computeSkillMdStale,
+  normalizeSkillMd,
+  skillMdChanged,
+  type ReadResult,
+} from "./skill-md.js";
 import { renderDashboard, renderCompact, renderTerse, renderStats, buildStats } from "./format.js";
 import { writeSettingsAtomic } from "./atomic-write.js";
 import { skipWhileRunning } from "./follow.js";
