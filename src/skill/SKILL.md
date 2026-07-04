@@ -8,7 +8,7 @@ user-invocable: true
 ---
 
 ```bash
-which cc-skill-trace 2>/dev/null || { echo "NOT INSTALLED: npm install -g cc-skill-trace && cc-skill-trace install"; exit 0; }
+which cc-skill-trace 2>/dev/null || where cc-skill-trace 2>/dev/null || { echo "NOT INSTALLED: npm install -g cc-skill-trace && cc-skill-trace install"; exit 0; }
 cc-skill-trace show --scan --terse -n 15 2>/dev/null
 ```
 
