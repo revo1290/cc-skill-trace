@@ -71,6 +71,60 @@ describe("extractInvocationsFromFile", () => {
     assert.equal(events[0].source, "user");
   });
 
+  it("prefers an explicit user_invoked flag over the trigger-message heuristic (#177)", async () => {
+    // Trigger text starts with "/commit" so the regex heuristic alone would
+    // mislabel this as user-invoked, but Claude Code recorded user_invoked=false.
+    const file = join(dir, "explicit-claude.jsonl");
+    await writeFile(file, jsonl([
+      userMsg("/commit コマンドについて教えて"),
+      {
+        type: "message",
+        timestamp: "2026-01-01T00:00:01.000Z",
+        sessionId: "sess-1",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "tu-1", name: "Skill", input: { skill: "commit" }, user_invoked: false },
+          ],
+        },
+      },
+    ]));
+    const events = await extractInvocationsFromFile(file);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].source, "claude", "explicit user_invoked=false must win over the regex");
+  });
+
+  it("honors an entry-level user_invoked=true even when trigger text lacks a slash (#177)", async () => {
+    const file = join(dir, "explicit-user.jsonl");
+    await writeFile(file, jsonl([
+      userMsg("please summarize this"),
+      {
+        type: "message",
+        timestamp: "2026-01-01T00:00:01.000Z",
+        sessionId: "sess-1",
+        user_invoked: true,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tu-1", name: "Skill", input: { skill: "pdf" } }],
+        },
+      },
+    ]));
+    const events = await extractInvocationsFromFile(file);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].source, "user", "explicit user_invoked=true must win over the regex");
+  });
+
+  it("falls back to the trigger-message heuristic when user_invoked is absent (#177)", async () => {
+    const file = join(dir, "no-flag-heuristic.jsonl");
+    await writeFile(file, jsonl([
+      userMsg("/pdf rotate this"),
+      assistantSkill("pdf"),
+    ]));
+    const events = await extractInvocationsFromFile(file);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].source, "user");
+  });
+
   it("extracts multiple Skill calls from one assistant message", async () => {
     const file = join(dir, "multi-skill.jsonl");
     await writeFile(file, jsonl([

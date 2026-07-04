@@ -198,12 +198,24 @@ export async function extractInvocationsFromFile(
       const skillArgs = call.input.args ? String(call.input.args) : undefined;
 
       // Detect user-invoked vs Claude auto-invoked.
+      // Prefer the authoritative `user_invoked` flag if Claude Code recorded it
+      // on the tool_use block or the entry — this matches how the real-time
+      // hook-capture path determines `source`. Fall back to inferring from the
+      // preceding message text only when the flag is absent (#177).
+      const explicitUserInvoked =
+        typeof call.user_invoked === "boolean"
+          ? call.user_invoked
+          : typeof entry.user_invoked === "boolean"
+            ? entry.user_invoked
+            : undefined;
+
       const bareSkillName = skillName.includes(":") ? skillName.split(":").pop()! : skillName;
       const slashCmdRe = new RegExp(
         `^/(${escapeRegExp(skillName)}|${escapeRegExp(bareSkillName)})(\\s|$)`,
         "i"
       );
-      const isUserInvoked = slashCmdRe.test(triggerMessage?.trimStart() ?? "");
+      const isUserInvoked =
+        explicitUserInvoked ?? slashCmdRe.test(triggerMessage?.trimStart() ?? "");
 
       // Estimate injectedTokens from the tool_result that follows this call (#34).
       // The next user message should contain a tool_result block with matching tool_use_id.

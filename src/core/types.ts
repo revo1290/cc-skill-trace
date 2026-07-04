@@ -7,6 +7,12 @@ export interface ToolUse {
   id: string;
   name: string;
   input: Record<string, unknown>;
+  /**
+   * Present when Claude Code recorded whether the invocation came from a user
+   * slash command. When available this is authoritative and should be preferred
+   * over inferring `source` from the preceding message text (#177).
+   */
+  user_invoked?: boolean;
 }
 
 export interface ToolResult {
@@ -37,6 +43,11 @@ export interface SessionLogEntry {
   timestamp: string;
   sessionId?: string;
   uuid?: string;
+  /**
+   * Entry-level flag set by Claude Code when the invocation was triggered by a
+   * user slash command. Preferred over regex inference of `source` (#177).
+   */
+  user_invoked?: boolean;
   costUSD?: number;
   usage?: {
     input_tokens: number;
