@@ -14,9 +14,9 @@ import { program } from "commander";
 import chalk from "chalk";
 import { readFile, writeFile, access } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
 import {
   readEvents,
   clearEvents,
@@ -33,9 +33,9 @@ import { writeSettingsAtomic } from "./atomic-write.js";
 import { normalizeSkillMd, skillMdChanged } from "./skill-md.js";
 import { skipWhileRunning } from "./follow.js";
 import { parseDuration } from "./duration.js";
+import { resolveVersion } from "./version.js";
 
-const _require = createRequire(import.meta.url);
-const VERSION = (_require("../../package.json") as { version: string }).version;
+const VERSION = resolveVersion(dirname(fileURLToPath(import.meta.url)));
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.Z+-]*)?$/;
 
