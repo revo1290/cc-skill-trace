@@ -28,9 +28,14 @@ import {
 } from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
+import {
+  computeSkillMdStale,
+  normalizeSkillMd,
+  skillMdChanged,
+  type ReadResult,
+} from "./skill-md.js";
 import { renderDashboard, renderCompact, renderTerse, renderStats, buildStats } from "./format.js";
 import { writeSettingsAtomic } from "./atomic-write.js";
-import { normalizeSkillMd, skillMdChanged } from "./skill-md.js";
 import { skipWhileRunning } from "./follow.js";
 import { parseDuration } from "./duration.js";
 import { resolveVersion } from "./version.js";
@@ -118,17 +123,29 @@ async function bundledSkillMdPath(): Promise<string> {
 
 const installedSkillMdPath = join(homedir(), ".claude", "skills", "skill-trace", "SKILL.md");
 
+async function readSkillMd(path: string): Promise<ReadResult> {
+  try {
+    return { ok: true, content: await readFile(path, "utf-8") };
+  } catch {
+    return { ok: false };
+  }
+}
+
 /** Returns true when the installed SKILL.md differs from the bundled one. */
 async function isSkillMdStale(): Promise<boolean> {
-  try {
-    const [installed, bundled] = await Promise.all([
-      readFile(installedSkillMdPath, "utf-8"),
-      readFile(await bundledSkillMdPath(), "utf-8"),
-    ]);
-    return skillMdChanged(installed, bundled);
-  } catch {
-    return false;
+  const [bundled, installed] = await Promise.all([
+    readSkillMd(await bundledSkillMdPath()),
+    readSkillMd(installedSkillMdPath),
+  ]);
+  const { stale, bundledMissing } = computeSkillMdStale(bundled, installed);
+  if (bundledMissing) {
+    // A missing bundled SKILL.md means the package was built incorrectly
+    // (e.g. #183). Surface it instead of silently reporting "up to date".
+    process.stderr.write(
+      chalk.yellow("⚠  Bundled SKILL.md not found — the package may be built incorrectly.\n\n")
+    );
   }
+  return stale;
 }
 
 // ─── install ──────────────────────────────────────────────────────────────────
