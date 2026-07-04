@@ -23,6 +23,7 @@ import {
   appendEvent,
   pruneEvents,
   backupEvents,
+  selectNewEvents,
   EVENTS_FILE,
 } from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
@@ -78,15 +79,14 @@ async function scanAndMerge(opts: {
   sessionId?: string;
 }): Promise<{ events: Awaited<ReturnType<typeof readEvents>>; imported: number }> {
   const events = await extractAllInvocations({ ...opts, onProgress: scanProgress });
-  const existingIds = new Set((await readEvents()).map((e) => e.id));
-  let imported = 0;
-  for (const ev of events) {
-    if (!existingIds.has(ev.id)) {
-      await appendEvent(ev);
-      imported++;
-    }
+  // Dedup against everything already stored — including hook-captured events,
+  // which carry a random UUID rather than the scan's tool_use id, so a plain
+  // id match would re-import every one of them (#182).
+  const toImport = selectNewEvents(await readEvents(), events);
+  for (const ev of toImport) {
+    await appendEvent(ev);
   }
-  return { events, imported };
+  return { events, imported: toImport.length };
 }
 
 program
