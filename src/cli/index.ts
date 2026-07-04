@@ -575,17 +575,19 @@ program
   .description("List all unique skills seen, with invocation counts")
   .option("--since <date>", "Filter from this ISO date", validateSince)
   .option("--before <date>", "Filter up to this ISO date", validateSince)
+  .option("--session <id>", "Filter by session ID")
   .option("--scan", "Scan session logs first")
   .option("--json", "Output as JSON")
   .action(async (opts) => {
     validateDateRange(opts.since, opts.before);
     if (opts.scan) {
-      const { imported } = await scanAndMerge({ since: opts.since });
+      const { imported } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
       process.stderr.write(chalk.gray(`  Imported ${imported} new invocations.\n\n`));
     }
     const events = await readEvents({
       since: opts.since as string | undefined,
       before: opts.before as string | undefined,
+      sessionId: opts.session as string | undefined,
     });
 
     const stats = buildStats(events);

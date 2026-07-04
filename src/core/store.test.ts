@@ -47,6 +47,17 @@ describe("store", () => {
       assert.deepEqual(range.map(e => e.id), ["mid"]);
     });
 
+    it("filters by sessionId at read time (#194)", async () => {
+      const sessionDir = dir + "-session";
+      await appendEvent(makeEvent({ id: "a", sessionId: "session-1" }), sessionDir);
+      await appendEvent(makeEvent({ id: "b", sessionId: "session-2" }), sessionDir);
+      await appendEvent(makeEvent({ id: "c", sessionId: "session-1" }), sessionDir);
+      const scoped = await readEvents({ dir: sessionDir, sessionId: "session-1" });
+      assert.deepEqual(scoped.map(e => e.id), ["a", "c"]);
+      const other = await readEvents({ dir: sessionDir, sessionId: "session-2" });
+      assert.deepEqual(other.map(e => e.id), ["b"]);
+    });
+
     it("respects limit option returning most recent events (#18)", async () => {
       const limitDir = dir + "-limit";
       for (let i = 1; i <= 5; i++) {
