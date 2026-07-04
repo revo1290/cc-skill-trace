@@ -122,6 +122,49 @@ export async function readEvents(
   return events;
 }
 
+// ─── Cross-source deduplication (#182) ───────────────────────────────────────
+// `hook-capture` assigns each event a random UUID, while `scan` uses the Skill
+// `tool_use` id (e.g. "toolu_abc123") from the session log. The same invocation
+// therefore gets two different ids, so id-based dedup never matches and `scan`
+// stores a second copy of every hook-captured event. We treat a scanned event
+// and a stored event as the *same* invocation when they share session, skill
+// name and args and their timestamps fall within this window — the PreToolUse
+// hook fires within about a second of the assistant message whose timestamp
+// `scan` reads, so the window only needs to absorb that small skew (and must
+// stay short enough not to merge two deliberate re-runs of the same skill).
+export const DEDUP_WINDOW_MS = 5000;
+
+function sameInvocation(a: SkillInvocationEvent, b: SkillInvocationEvent): boolean {
+  if (a.sessionId !== b.sessionId) return false;
+  if (a.skillName !== b.skillName) return false;
+  if ((a.skillArgs ?? "") !== (b.skillArgs ?? "")) return false;
+  const dt = Math.abs(Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  return Number.isFinite(dt) && dt <= DEDUP_WINDOW_MS;
+}
+
+/**
+ * From freshly scanned `candidates`, return only the events not already present
+ * in `existing`. A candidate is dropped when its id already exists (repeated
+ * scans) or when it matches an existing event by session, skill, args and
+ * timestamp window — which is how a scan result lines up with the
+ * hook-captured record of the same invocation (#182). Candidates are only
+ * compared against `existing`, never against each other, so distinct scanned
+ * invocations (each with its own `tool_use` id) are always preserved.
+ */
+export function selectNewEvents(
+  existing: SkillInvocationEvent[],
+  candidates: SkillInvocationEvent[]
+): SkillInvocationEvent[] {
+  const existingIds = new Set(existing.map((e) => e.id));
+  const fresh: SkillInvocationEvent[] = [];
+  for (const ev of candidates) {
+    if (existingIds.has(ev.id)) continue;
+    if (existing.some((e) => sameInvocation(e, ev))) continue;
+    fresh.push(ev);
+  }
+  return fresh;
+}
+
 export function clearEvents(dir = STORE_DIR): Promise<void> {
   return enqueueWrite(dir, async () => {
     await ensureStoreDir(dir);

@@ -13,5 +13,6 @@ export {
   EVENTS_FILE,
 } from "./core/store.js";
 export { extractAllInvocations, extractInvocationsFromFile } from "./core/parser.js";
+export { expandTilde } from "./core/utils.js";
 export { buildStats } from "./cli/format.js";
 export { buildHtmlReport } from "./cli/web-report.js";
