@@ -12,27 +12,30 @@ if (_nodeMajor < 18) {
 
 import { program } from "commander";
 import chalk from "chalk";
-import { readFile, writeFile, rename, copyFile as fsCopyFile } from "node:fs/promises";
+import { readFile, writeFile, access } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
 import {
   readEvents,
   clearEvents,
   appendEvent,
   pruneEvents,
   backupEvents,
+  selectNewEvents,
   EVENTS_FILE,
 } from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
 import { buildHtmlReport } from "./web-report.js";
-import { computeSkillMdStale, type ReadResult } from "./skill-md.js";
+import { computeSkillMdStale, normalizeSkillMd, skillMdChanged, type ReadResult } from "./skill-md.js";
 import { renderDashboard, renderCompact, renderTerse, renderStats, buildStats } from "./format.js";
+import { writeSettingsAtomic } from "./atomic-write.js";
+import { skipWhileRunning } from "./follow.js";
 import { parseDuration } from "./duration.js";
+import { resolveVersion } from "./version.js";
 
-const _require = createRequire(import.meta.url);
-const VERSION = (_require("../../package.json") as { version: string }).version;
+const VERSION = resolveVersion(dirname(fileURLToPath(import.meta.url)));
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.Z+-]*)?$/;
 
@@ -65,25 +68,6 @@ function validateDateRange(since: string | undefined, before: string | undefined
   }
 }
 
-/**
- * Atomically write JSON to `path`:
- *  1. Back up the current file as `<path>.bak` (best-effort)
- *  2. Write new content to `<path>.tmp`
- *  3. Rename tmp → path  (atomic on POSIX; best-effort on Windows)
- */
-async function writeSettingsAtomic(path: string, data: unknown): Promise<void> {
-  const json = JSON.stringify(data, null, 2);
-  const tmp = path + ".tmp";
-  // Best-effort backup — don't fail if the original doesn't exist yet
-  try {
-    await fsCopyFile(path, path + ".bak");
-  } catch {
-    /* no original yet */
-  }
-  await writeFile(tmp, json, "utf-8");
-  await rename(tmp, path);
-}
-
 function scanProgress(done: number, total: number): void {
   process.stderr.write(chalk.gray(`\r  Scanning ${done}/${total} files…`));
   if (done === total) process.stderr.write("\n");
@@ -95,15 +79,14 @@ async function scanAndMerge(opts: {
   sessionId?: string;
 }): Promise<{ events: Awaited<ReturnType<typeof readEvents>>; imported: number }> {
   const events = await extractAllInvocations({ ...opts, onProgress: scanProgress });
-  const existingIds = new Set((await readEvents()).map((e) => e.id));
-  let imported = 0;
-  for (const ev of events) {
-    if (!existingIds.has(ev.id)) {
-      await appendEvent(ev);
-      imported++;
-    }
+  // Dedup against everything already stored — including hook-captured events,
+  // which carry a random UUID rather than the scan's tool_use id, so a plain
+  // id match would re-import every one of them (#182).
+  const toImport = selectNewEvents(await readEvents(), events);
+  for (const ev of toImport) {
+    await appendEvent(ev);
   }
-  return { events, imported };
+  return { events, imported: toImport.length };
 }
 
 program
@@ -116,7 +99,21 @@ async function bundledSkillMdPath(): Promise<string> {
   const { fileURLToPath } = await import("node:url");
   const { dirname } = await import("node:path");
   const here = dirname(fileURLToPath(import.meta.url));
-  return join(here, "..", "skill", "SKILL.md");
+  // Primary: dist/skill/SKILL.md, copied by the build step. Fallback: the source
+  // copy shipped in the package (`files` includes src/skill/SKILL.md), so a
+  // published build that predates the copy step still resolves instead of
+  // failing with "Skill file not found". (#183)
+  const primary = join(here, "..", "skill", "SKILL.md");
+  const fallback = join(here, "..", "..", "src", "skill", "SKILL.md");
+  for (const candidate of [primary, fallback]) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      // try the next candidate
+    }
+  }
+  return primary;
 }
 
 const installedSkillMdPath = join(homedir(), ".claude", "skills", "skill-trace", "SKILL.md");
@@ -188,11 +185,13 @@ program
       const bundled = await readFile(skillSrc, "utf-8");
       const installed = await readFile(installedSkillMdPath, "utf-8").catch(() => null);
       await mkdir(skillDir, { recursive: true });
-      await fsCopyFile(skillSrc, installedSkillMdPath);
+      // Write with LF-normalized content so a Windows CRLF checkout of the bundled
+      // file doesn't leave the installed copy looking permanently stale (#181).
+      await writeFile(installedSkillMdPath, normalizeSkillMd(bundled), "utf-8");
       if (installed === null) {
         console.log(chalk.green("✓  Skill installed   → " + skillDir));
         console.log(chalk.gray("  Use /skill-trace inside Claude Code to open the dashboard."));
-      } else if (installed !== bundled) {
+      } else if (skillMdChanged(installed, bundled)) {
         console.log(chalk.green("✓  SKILL.md updated  → " + skillDir));
         console.log(chalk.gray("  Restart Claude Code to apply the updated skill definition."));
       } else {
@@ -338,8 +337,13 @@ program
             "  \r"
         );
       };
-      await tick();
-      const interval = setInterval(tick, 2000);
+      // Guard against overlapping ticks: if a tick takes longer than the
+      // interval (large events.jsonl / slow FS), setInterval would otherwise
+      // start the next one before the previous finished, interleaving stdout
+      // writes and garbling the output (#186).
+      const guardedTick = skipWhileRunning(tick);
+      await guardedTick();
+      const interval = setInterval(guardedTick, 2000);
       const cleanup = () => {
         clearInterval(interval);
         process.stdout.write("\n");

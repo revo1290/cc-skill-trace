@@ -5,7 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
-import { appendEvent, readEvents, clearEvents, pruneEvents, backupEvents, pendingWriteQueueCount } from "./store.js";
+import { appendEvent, readEvents, clearEvents, pruneEvents, backupEvents, pendingWriteQueueCount, selectNewEvents, DEDUP_WINDOW_MS } from "./store.js";
 import type { SkillInvocationEvent } from "./types.js";
 
 function makeEvent(overrides: Partial<SkillInvocationEvent> = {}): SkillInvocationEvent {
@@ -236,6 +236,72 @@ describe("store", () => {
       assert.equal(result.kept, 0);
       const remaining = await readEvents(dir);
       assert.deepEqual(remaining, []);
+    });
+  });
+
+  describe("selectNewEvents (#182)", () => {
+    // A hook-captured event (random UUID) and the scan-captured event for the
+    // same invocation (tool_use id) must be recognised as one, so scan doesn't
+    // store a second copy of every hook event.
+    const hookEvent = makeEvent({
+      id: "uuid-random-1234",
+      timestamp: "2026-01-01T00:00:01.000Z",
+      sessionId: "s1",
+      skillName: "commit",
+      source: "user",
+    });
+    const scanOfSameInvocation = makeEvent({
+      id: "toolu_abc123",
+      // scan reads the assistant message timestamp — close to but not equal to
+      // the hook's fire time.
+      timestamp: "2026-01-01T00:00:02.500Z",
+      sessionId: "s1",
+      skillName: "commit",
+      source: "claude",
+    });
+
+    it("drops a scanned event that matches a stored hook event by session/skill/args + time window", () => {
+      const fresh = selectNewEvents([hookEvent], [scanOfSameInvocation]);
+      assert.deepEqual(fresh, []);
+    });
+
+    it("keeps a scanned event whose timestamp is outside the dedup window", () => {
+      const later = makeEvent({
+        ...scanOfSameInvocation,
+        id: "toolu_later",
+        timestamp: new Date(Date.parse(hookEvent.timestamp) + DEDUP_WINDOW_MS + 1000).toISOString(),
+      });
+      const fresh = selectNewEvents([hookEvent], [later]);
+      assert.deepEqual(fresh.map((e) => e.id), ["toolu_later"]);
+    });
+
+    it("does not merge events with different skill args", () => {
+      const other = makeEvent({
+        ...scanOfSameInvocation,
+        id: "toolu_diff_args",
+        skillArgs: "--force",
+      });
+      const fresh = selectNewEvents([makeEvent({ ...hookEvent, skillArgs: "--dry-run" })], [other]);
+      assert.deepEqual(fresh.map((e) => e.id), ["toolu_diff_args"]);
+    });
+
+    it("does not merge events from different sessions", () => {
+      const other = makeEvent({ ...scanOfSameInvocation, id: "toolu_other_session", sessionId: "s2" });
+      const fresh = selectNewEvents([hookEvent], [other]);
+      assert.deepEqual(fresh.map((e) => e.id), ["toolu_other_session"]);
+    });
+
+    it("is idempotent across repeated scans (exact id already stored)", () => {
+      const fresh = selectNewEvents([scanOfSameInvocation], [scanOfSameInvocation]);
+      assert.deepEqual(fresh, []);
+    });
+
+    it("preserves two distinct invocations of the same skill in one scan batch", () => {
+      const first = makeEvent({ id: "toolu_1", timestamp: "2026-01-01T00:00:00.000Z", sessionId: "s1", skillName: "commit" });
+      const second = makeEvent({ id: "toolu_2", timestamp: "2026-01-01T00:00:01.000Z", sessionId: "s1", skillName: "commit" });
+      // Candidates are only compared against `existing`, never each other, so both survive.
+      const fresh = selectNewEvents([], [first, second]);
+      assert.deepEqual(fresh.map((e) => e.id).sort(), ["toolu_1", "toolu_2"]);
     });
   });
 });

@@ -1,6 +1,6 @@
-import { describe, it } from "node:test";
+import { describe, it, test } from "node:test";
 import assert from "node:assert/strict";
-import { computeSkillMdStale } from "./skill-md.js";
+import { normalizeSkillMd, skillMdChanged, computeSkillMdStale } from "./skill-md.js";
 
 describe("computeSkillMdStale", () => {
   it("is stale when installed content differs from bundled", () => {
@@ -39,4 +39,41 @@ describe("computeSkillMdStale", () => {
       bundledMissing: true,
     });
   });
+
+  it("ignores line-ending differences when deciding staleness (#181 + #190)", () => {
+    // The staleness check must stay line-ending agnostic so a CRLF checkout of
+    // the bundled file is not reported stale forever.
+    assert.deepEqual(
+      computeSkillMdStale(
+        { ok: true, content: "# Skill\r\nline 1\r\n" },
+        { ok: true, content: "# Skill\nline 1\n" }
+      ),
+      { stale: false, bundledMissing: false }
+    );
+  });
+});
+
+test("normalizeSkillMd converts CRLF to LF", () => {
+  assert.equal(normalizeSkillMd("a\r\nb\r\nc"), "a\nb\nc");
+});
+
+test("normalizeSkillMd converts lone CR to LF", () => {
+  assert.equal(normalizeSkillMd("a\rb"), "a\nb");
+});
+
+test("normalizeSkillMd leaves LF-only content unchanged", () => {
+  assert.equal(normalizeSkillMd("a\nb\nc"), "a\nb\nc");
+});
+
+test("skillMdChanged treats CRLF and LF versions as equal (#181)", () => {
+  const lf = "# Skill\nline 1\nline 2\n";
+  const crlf = "# Skill\r\nline 1\r\nline 2\r\n";
+  assert.equal(skillMdChanged(crlf, lf), false);
+  assert.equal(skillMdChanged(lf, lf), false);
+});
+
+test("skillMdChanged detects real content differences", () => {
+  const a = "# Skill\nold\n";
+  const b = "# Skill\nnew\n";
+  assert.equal(skillMdChanged(a, b), true);
 });
