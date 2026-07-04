@@ -5,7 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
-import { appendEvent, readEvents, clearEvents, pruneEvents, backupEvents, pendingWriteQueueCount } from "./store.js";
+import { appendEvent, readEvents, clearEvents, pruneEvents, backupEvents, pendingWriteQueueCount, checkStoreIntegrity, fixStore } from "./store.js";
 import type { SkillInvocationEvent } from "./types.js";
 
 function makeEvent(overrides: Partial<SkillInvocationEvent> = {}): SkillInvocationEvent {
@@ -236,6 +236,104 @@ describe("store", () => {
       assert.equal(result.kept, 0);
       const remaining = await readEvents(dir);
       assert.deepEqual(remaining, []);
+    });
+  });
+
+  describe("checkStoreIntegrity (#175)", () => {
+    it("reports zero bad lines for a clean store", async () => {
+      const d = dir + "-integrity-clean";
+      await appendEvent(makeEvent({ id: "v1" }), d);
+      await appendEvent(makeEvent({ id: "v2" }), d);
+
+      const r = await checkStoreIntegrity(d);
+      assert.equal(r.storePath, join(d, "events.jsonl"));
+      assert.equal(r.totalLines, 2);
+      assert.equal(r.validEvents, 2);
+      assert.equal(r.malformedLines, 0);
+      assert.equal(r.truncatedLines, 0);
+      assert.equal(r.tmpLeftover, null);
+    });
+
+    it("classifies malformed vs truncated lines", async () => {
+      const d = dir + "-integrity-bad";
+      await appendEvent(makeEvent({ id: "v1" }), d);
+      // Structurally complete (ends with }) but invalid JSON → malformed.
+      await appendFile(join(d, "events.jsonl"), '{"id":"broken","ts":}\n', "utf-8");
+      // Cut off mid-write (no closing brace) → truncated.
+      await appendFile(join(d, "events.jsonl"), '{"id":"trunc","skillName":"revi\n', "utf-8");
+
+      const r = await checkStoreIntegrity(d);
+      assert.equal(r.totalLines, 3);
+      assert.equal(r.validEvents, 1);
+      assert.equal(r.malformedLines, 1);
+      assert.equal(r.truncatedLines, 1);
+    });
+
+    it("returns an empty report for a store that does not exist", async () => {
+      const r = await checkStoreIntegrity(dir + "-integrity-missing");
+      assert.equal(r.totalLines, 0);
+      assert.equal(r.validEvents, 0);
+      assert.equal(r.tmpLeftover, null);
+    });
+
+    it("detects a stray events.jsonl.tmp leftover", async () => {
+      const d = dir + "-integrity-tmp";
+      await appendEvent(makeEvent({ id: "v1" }), d);
+      const tmpPath = join(d, "events.jsonl.tmp");
+      await appendFile(tmpPath, "partial", "utf-8");
+
+      const r = await checkStoreIntegrity(d);
+      assert.equal(r.tmpLeftover, tmpPath);
+    });
+  });
+
+  describe("fixStore (#175)", () => {
+    it("removes bad lines, keeps valid events, and backs up the original", async () => {
+      const d = dir + "-fix-basic";
+      await appendEvent(makeEvent({ id: "keep-1" }), d);
+      await appendFile(join(d, "events.jsonl"), "NOT_VALID_JSON\n", "utf-8");
+      await appendEvent(makeEvent({ id: "keep-2" }), d);
+
+      const before = await readFile(join(d, "events.jsonl"), "utf-8");
+      const res = await fixStore(d);
+
+      assert.equal(res.removed, 1);
+      assert.equal(res.kept, 2);
+      assert.equal(res.backupPath, join(d, "events.jsonl.bak"));
+      assert.equal(res.removedTmp, null);
+
+      // The backup preserves the pre-repair content verbatim.
+      const backup = await readFile(join(d, "events.jsonl.bak"), "utf-8");
+      assert.equal(backup, before);
+
+      // The repaired store parses cleanly and retains both valid events.
+      const events = await readEvents(d);
+      assert.deepEqual(events.map((e) => e.id).sort(), ["keep-1", "keep-2"]);
+
+      const after = await checkStoreIntegrity(d);
+      assert.equal(after.malformedLines + after.truncatedLines, 0);
+    });
+
+    it("removes a stray temp file even when the store is already clean", async () => {
+      const d = dir + "-fix-tmp";
+      await appendEvent(makeEvent({ id: "v1" }), d);
+      const tmpPath = join(d, "events.jsonl.tmp");
+      await appendFile(tmpPath, "partial", "utf-8");
+
+      const res = await fixStore(d);
+      assert.equal(res.removed, 0);
+      assert.equal(res.kept, 1);
+      assert.equal(res.removedTmp, tmpPath);
+
+      const after = await checkStoreIntegrity(d);
+      assert.equal(after.tmpLeftover, null);
+    });
+
+    it("is a no-op backup-wise when there is no store file", async () => {
+      const res = await fixStore(dir + "-fix-missing");
+      assert.equal(res.backupPath, null);
+      assert.equal(res.removed, 0);
+      assert.equal(res.kept, 0);
     });
   });
 });

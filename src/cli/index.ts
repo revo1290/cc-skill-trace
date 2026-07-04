@@ -23,6 +23,8 @@ import {
   appendEvent,
   pruneEvents,
   backupEvents,
+  checkStoreIntegrity,
+  fixStore,
   EVENTS_FILE,
 } from "../core/store.js";
 import { extractAllInvocations } from "../core/parser.js";
@@ -456,6 +458,58 @@ program
     } else {
       await clearEvents();
       console.log(chalk.green("✓  Cleared."));
+    }
+  });
+
+// ─── doctor ─────────────────────────────────────────────────────────────────────
+program
+  .command("doctor")
+  .description("Diagnose and repair the event store (events.jsonl)")
+  .option("--check-store", "Report integrity statistics for the event store")
+  .option("--fix-store", "Remove malformed/truncated lines (a .bak backup is created first)")
+  .action(async (opts) => {
+    const integrity = await checkStoreIntegrity();
+    const bad = integrity.malformedLines + integrity.truncatedLines;
+
+    console.log(chalk.bold("Event store: ") + integrity.storePath);
+    console.log(`  Total lines:     ${integrity.totalLines}`);
+    console.log(chalk.green(`  Valid events:    ${integrity.validEvents}`));
+    console.log(
+      (integrity.malformedLines ? chalk.yellow : chalk.gray)(
+        `  Malformed lines: ${integrity.malformedLines}`
+      )
+    );
+    console.log(
+      (integrity.truncatedLines ? chalk.yellow : chalk.gray)(
+        `  Truncated lines: ${integrity.truncatedLines}`
+      )
+    );
+
+    if (integrity.tmpLeftover) {
+      console.log(chalk.yellow(`\n⚠  Found incomplete write: ${integrity.tmpLeftover}`));
+      console.log(chalk.gray("   This may indicate a previous crash during prune/clear."));
+    }
+
+    if (opts.fixStore) {
+      if (bad === 0 && !integrity.tmpLeftover) {
+        console.log(chalk.green("\n✓  Store is clean — nothing to fix."));
+        return;
+      }
+      const res = await fixStore();
+      if (res.backupPath) console.log(chalk.gray(`\n  Backup written → ${res.backupPath}`));
+      console.log(
+        chalk.green(`✓  Removed ${res.removed} bad line(s), kept ${res.kept} valid event(s).`)
+      );
+      if (res.removedTmp)
+        console.log(chalk.green(`✓  Removed stray temp file → ${res.removedTmp}`));
+      return;
+    }
+
+    // Check-only mode (default, or explicit --check-store).
+    if (bad > 0 || integrity.tmpLeftover) {
+      console.log(chalk.yellow("\n⚠  Run `cc-skill-trace doctor --fix-store` to repair."));
+    } else {
+      console.log(chalk.green("\n✓  Store is clean."));
     }
   });
 
