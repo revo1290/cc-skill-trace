@@ -1,20 +1,21 @@
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, basename } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
+import { estimateTokens } from "./analyze.js";
 import { expandTilde } from "./utils.js";
 import type {
+  ContentBlock,
   SessionLogEntry,
   SkillInvocationEvent,
-  ToolUse,
   ToolResult,
-  ContentBlock,
+  ToolUse,
 } from "./types.js";
 
 // Read at call time so tests and CLI can override via CC_PROJECTS_DIR at runtime (#38)
 function getProjectsDir(): string {
-  const raw = process.env["CC_PROJECTS_DIR"] ?? join(homedir(), ".claude", "projects");
+  const raw = process.env.CC_PROJECTS_DIR ?? join(homedir(), ".claude", "projects");
   return expandTilde(raw);
 }
 
@@ -24,7 +25,11 @@ function escapeRegExp(s: string): string {
 
 // ─── Concurrency limiter ─────────────────────────────────────────────────────
 
-async function mapWithLimit<T, R>(
+/**
+ * Map over `items` with at most `limit` promises in flight (#138).
+ * Preserves input order in the result array.
+ */
+export async function mapWithLimit<T, R>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<R>
@@ -78,9 +83,9 @@ export async function isClaudeSessionFile(filePath: string): Promise<boolean> {
       }
       if (!parsed || typeof parsed !== "object") continue;
       const obj = parsed as Record<string, unknown>;
-      if (typeof obj["sessionId"] === "string") return true;
-      if (typeof obj["type"] === "string" && CLAUDE_ENTRY_TYPES.has(obj["type"])) return true;
-      const message = obj["message"];
+      if (typeof obj.sessionId === "string") return true;
+      if (typeof obj.type === "string" && CLAUDE_ENTRY_TYPES.has(obj.type)) return true;
+      const message = obj.message;
       if (message && typeof message === "object" && "role" in message) return true;
     }
     return false;
@@ -106,8 +111,24 @@ async function* readJsonlFile(filePath: string): AsyncGenerator<SessionLogEntry>
   }
 }
 
-async function findAllSessionFiles(sessionId?: string): Promise<string[]> {
-  const files: string[] = [];
+/** One discovered Claude Code session file. */
+export interface SessionFileInfo {
+  path: string;
+  /** File modification time in epoch ms (used by scan --resume, #165). */
+  mtimeMs: number;
+}
+
+/**
+ * List session files, optionally scoped to one session ID.
+ *
+ * Claude Code names session files `<sessionId>.jsonl`, so when a session
+ * filter is given we skip unrelated files by name instead of reading every
+ * session file (#188). If the naming convention ever changes and the filter
+ * matches nothing, callers should fall back to an unscoped listing so the
+ * post-read sessionId filter can still recover the session.
+ */
+export async function listSessionFiles(sessionId?: string): Promise<SessionFileInfo[]> {
+  const files: SessionFileInfo[] = [];
   let projectDirs: string[];
   try {
     projectDirs = await readdir(getProjectsDir());
@@ -122,11 +143,13 @@ async function findAllSessionFiles(sessionId?: string): Promise<string[]> {
       const sessionFiles = await readdir(projectPath);
       for (const f of sessionFiles) {
         if (!f.endsWith(".jsonl")) continue;
-        // Fast path: Claude Code names session files "<sessionId>.jsonl", so when
-        // filtering by session we can skip unrelated files by name instead of
-        // reading and parsing every session file. (#188)
         if (sessionId && basename(f, ".jsonl") !== sessionId) continue;
-        files.push(join(projectPath, f));
+        const full = join(projectPath, f);
+        try {
+          files.push({ path: full, mtimeMs: (await stat(full)).mtimeMs });
+        } catch {
+          // skip unreadable files
+        }
       }
     } catch {
       // skip unreadable dirs
@@ -137,20 +160,31 @@ async function findAllSessionFiles(sessionId?: string): Promise<string[]> {
 
 // ─── Core extraction logic ───────────────────────────────────────────────────
 
+/** Options for {@link extractInvocationsFromFile}. */
+export interface ExtractOptions {
+  /** Max stored length of triggerMessage (default 300) (#120). */
+  triggerMaxLen?: number;
+  /** When false, omit triggerMessage entirely (#74). */
+  captureTriggerMessages?: boolean;
+}
+
 /**
  * Extract all Skill tool invocations from a single JSONL session file.
  * For each invocation we also capture the nearest preceding user message
  * so we can show "why did this trigger".
  */
 export async function extractInvocationsFromFile(
-  filePath: string
+  filePath: string,
+  opts: ExtractOptions = {}
 ): Promise<SkillInvocationEvent[]> {
+  const maxLen = opts.triggerMaxLen ?? 300;
+  const capture = opts.captureTriggerMessages ?? true;
   const events: SkillInvocationEvent[] = [];
 
   // Skip files that are not Claude Code session logs so a stray `.jsonl`
   // under CC_PROJECTS_DIR is not parsed as skill invocations (#171).
   if (!(await isClaudeSessionFile(filePath))) {
-    if (process.env["CC_DEBUG"]) {
+    if (process.env.CC_DEBUG) {
       process.stderr.write(`[cc-skill-trace] skipping non-session file: ${filePath}\n`);
     }
     return events;
@@ -164,7 +198,7 @@ export async function extractInvocationsFromFile(
 
   // Scan through entries looking for assistant messages that contain a Skill tool_use
   for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
+    const entry = entries[i]!;
     if (!entry.message) continue;
     const msg = entry.message;
     if (msg.role !== "assistant") continue;
@@ -178,17 +212,17 @@ export async function extractInvocationsFromFile(
     // Find the most recent user message before this entry
     let triggerMessage: string | undefined;
     for (let j = i - 1; j >= 0; j--) {
-      const prev = entries[j];
+      const prev = entries[j]!;
       if (!prev.message || prev.message.role !== "user") continue;
       const content = prev.message.content;
       if (typeof content === "string") {
-        triggerMessage = content.slice(0, 300);
+        triggerMessage = content.slice(0, maxLen);
       } else {
         const textBlocks = (content as ContentBlock[])
           .filter((b) => b.type === "text")
           .map((b) => (b as { type: "text"; text: string }).text)
           .join(" ");
-        triggerMessage = textBlocks.slice(0, 300);
+        triggerMessage = textBlocks.slice(0, maxLen);
       }
       break;
     }
@@ -221,7 +255,7 @@ export async function extractInvocationsFromFile(
       // The next user message should contain a tool_result block with matching tool_use_id.
       let injectedTokens: number | undefined;
       for (let j = i + 1; j < Math.min(i + 4, entries.length); j++) {
-        const next = entries[j];
+        const next = entries[j]!;
         if (!next.message) continue;
         if (next.message.role !== "user") break;
         const content = next.message.content;
@@ -237,7 +271,7 @@ export async function extractInvocationsFromFile(
                   .filter((b) => b.type === "text")
                   .map((b) => b.text ?? "")
                   .join("");
-          if (text) injectedTokens = Math.round(text.length / 4);
+          if (text) injectedTokens = estimateTokens(text);
           break;
         }
       }
@@ -249,10 +283,11 @@ export async function extractInvocationsFromFile(
         skillName,
         skillArgs,
         source: isUserInvoked ? "user" : "claude",
-        triggerMessage,
+        triggerMessage: capture ? triggerMessage : undefined,
         injectedTokens,
-        cwd: undefined,
-        gitBranch: undefined,
+        cwd: entry.cwd,
+        gitBranch: entry.gitBranch,
+        recordedVia: "scan",
       });
     }
   }
@@ -260,33 +295,49 @@ export async function extractInvocationsFromFile(
   return events;
 }
 
+/** Options for {@link extractAllInvocations}. */
+export interface ExtractAllOptions extends ExtractOptions {
+  /** Only include events with timestamp >= this ISO string. */
+  since?: string;
+  /** Only include events from this session. */
+  sessionId?: string;
+  /** Only process session files modified after this epoch ms (scan --resume, #165). */
+  modifiedAfterMs?: number;
+  /** Restrict the scan to these files (used by scan --watch, #128). */
+  files?: string[];
+  /** Progress callback: (done, total, currentFile) (#140). */
+  onProgress?: (done: number, total: number, file?: string) => void;
+}
+
 /**
  * Scan all Claude Code session files and return skill invocation events.
  * Processes files with a concurrency limit to avoid overwhelming the OS.
- * Pass `since` (ISO string) to limit to recent sessions.
- * Pass `onProgress` to receive (done, total) updates during scanning.
  */
 export async function extractAllInvocations(
-  opts: {
-    since?: string;
-    sessionId?: string;
-    onProgress?: (done: number, total: number) => void;
-  } = {}
+  opts: ExtractAllOptions = {}
 ): Promise<SkillInvocationEvent[]> {
-  let files = await findAllSessionFiles(opts.sessionId);
+  let fileInfos = await listSessionFiles(opts.sessionId);
   // Fallback: if a session filter matched no files by name (e.g. Claude Code's
   // file-naming convention changed), scan everything so the post-read sessionId
   // filter below can still recover the session. (#188)
-  if (opts.sessionId && files.length === 0) {
-    files = await findAllSessionFiles();
+  if (opts.sessionId && fileInfos.length === 0) {
+    fileInfos = await listSessionFiles();
+  }
+  if (opts.modifiedAfterMs != null) {
+    fileInfos = fileInfos.filter((f) => f.mtimeMs > opts.modifiedAfterMs!);
+  }
+  let files = fileInfos.map((f) => f.path);
+  if (opts.files) {
+    const allow = new Set(opts.files);
+    files = files.filter((f) => allow.has(f));
   }
   const allEvents: SkillInvocationEvent[] = [];
   let done = 0;
 
-  const concurrency = Math.max(1, parseInt(process.env["CC_SCAN_CONCURRENCY"] ?? "8", 10) || 8);
+  const concurrency = Math.max(1, parseInt(process.env.CC_SCAN_CONCURRENCY ?? "8", 10) || 8);
   await mapWithLimit(files, concurrency, async (file) => {
     try {
-      const events = await extractInvocationsFromFile(file);
+      const events = await extractInvocationsFromFile(file, opts);
       for (const ev of events) {
         if (opts.since && ev.timestamp < opts.since) continue;
         if (opts.sessionId && ev.sessionId !== opts.sessionId) continue;
@@ -295,8 +346,13 @@ export async function extractAllInvocations(
     } catch {
       // skip unreadable files
     }
-    opts.onProgress?.(++done, files.length);
+    opts.onProgress?.(++done, files.length, file);
   });
 
   return allEvents.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+}
+
+/** Newest mtime among the given session files (helper for scan --resume, #165). */
+export function newestMtimeMs(files: SessionFileInfo[]): number {
+  return files.reduce((max, f) => Math.max(max, f.mtimeMs), 0);
 }

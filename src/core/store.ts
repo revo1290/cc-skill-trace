@@ -1,19 +1,39 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { appendFile, copyFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
+import { getStoreDir } from "./config.js";
+import { compileFilter, matchesFilter } from "./filter.js";
+import type { EventFilter } from "./filter.js";
+import { EVENT_SCHEMA_VERSION } from "./types.js";
 import type { SkillInvocationEvent } from "./types.js";
 
+export { getStoreDir } from "./config.js";
+
+/** Default store directory. Prefer {@link getStoreDir}, which honors CC_STORE_DIR (#95). */
 export const STORE_DIR = join(homedir(), ".cc-skill-trace");
+/** Default events file path (informational). */
 export const EVENTS_FILE = join(STORE_DIR, "events.jsonl");
 
-export async function ensureStoreDir(dir = STORE_DIR): Promise<void> {
+const EVENTS_FILE_NAME = "events.jsonl";
+
+function eventsPath(dir: string): string {
+  return join(dir, EVENTS_FILE_NAME);
+}
+
+/** Create the store directory if it does not exist. */
+export async function ensureStoreDir(dir = getStoreDir()): Promise<void> {
   await mkdir(dir, { recursive: true });
 }
 
 // ─── Write serialization queue ───────────────────────────────────────────────
-// Multiple concurrent hook invocations can race on the same events.jsonl.
-// We serialize all mutating operations (append, clear, prune) per store dir
-// using a per-dir promise chain so writes never interleave.
+// Multiple concurrent operations within one process can race on the same
+// events.jsonl. We serialize all mutating operations (append, clear, prune,
+// update) per store dir using a per-dir promise chain so writes never
+// interleave. Cross-process safety additionally relies on each append being a
+// single small write (well under PIPE_BUF), which POSIX guarantees is atomic
+// even with O_APPEND from multiple processes (#161).
 
 const writeQueues = new Map<string, Promise<void>>();
 
@@ -49,19 +69,25 @@ export function pendingWriteQueueCount(): number {
   return writeQueues.size;
 }
 
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3, delayMs = 25): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 // ─── Read options ────────────────────────────────────────────────────────────
 
-export interface ReadEventsOptions {
-  /** Store directory (defaults to STORE_DIR) */
+/** Options accepted by {@link readEvents}. Extends {@link EventFilter} (#119). */
+export interface ReadEventsOptions extends EventFilter {
+  /** Store directory (defaults to {@link getStoreDir}). */
   dir?: string;
-  /** Only return events with timestamp >= this ISO string */
-  since?: string;
-  /** Only return events with timestamp <= this ISO string */
-  before?: string;
-  /** Only return events for this skill name */
-  skill?: string;
-  /** Only return events for this session ID */
-  sessionId?: string;
   /**
    * Return at most this many events, taken from the most recent end (#18).
    * Avoids loading unbounded datasets into memory for dashboards/exports.
@@ -71,55 +97,109 @@ export interface ReadEventsOptions {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export function appendEvent(event: SkillInvocationEvent, dir = STORE_DIR): Promise<void> {
-  return enqueueWrite(dir, async () => {
-    await ensureStoreDir(dir);
-    await appendFile(join(dir, "events.jsonl"), JSON.stringify(event) + "\n", "utf-8");
-  });
+/**
+ * Append one event to the store.
+ * Writes are serialized per directory and retried up to 3 times (#124).
+ * Events are stamped with the current schema version (#94).
+ */
+export function appendEvent(event: SkillInvocationEvent, dir = getStoreDir()): Promise<void> {
+  return enqueueWrite(dir, () =>
+    withRetry(async () => {
+      await ensureStoreDir(dir);
+      const stamped: SkillInvocationEvent = { v: EVENT_SCHEMA_VERSION, ...event };
+      // A single small append with O_APPEND is atomic in practice on local
+      // filesystems, which keeps concurrent hook processes from interleaving (#161).
+      await appendFile(eventsPath(dir), `${JSON.stringify(stamped)}\n`, "utf-8");
+    })
+  );
 }
 
 /**
- * Read events from the store, optionally applying filters at parse time to
- * avoid loading the entire file into memory (#18).
+ * Read events from the store as a stream, applying filters per line so the
+ * whole file is never held in memory (#89, #119).
  *
- * Accepts either a legacy `readEvents(dirString)` call or the new
- * `readEvents(options)` form — both are supported for backward compatibility.
+ * Accepts either a legacy `readEvents(dirString)` call or the options form.
  */
 export async function readEvents(
   opts: ReadEventsOptions | string = {}
 ): Promise<SkillInvocationEvent[]> {
   // Legacy: readEvents(dirString)
   const options: ReadEventsOptions = typeof opts === "string" ? { dir: opts } : opts;
-  const dir = options.dir ?? STORE_DIR;
+  const dir = options.dir ?? getStoreDir();
+  const compiled = compileFilter(options);
 
-  let raw: string;
+  const events: SkillInvocationEvent[] = [];
+  let rl: ReturnType<typeof createInterface>;
   try {
-    raw = await readFile(join(dir, "events.jsonl"), "utf-8");
+    await stat(eventsPath(dir));
+    rl = createInterface({
+      input: createReadStream(eventsPath(dir), { encoding: "utf-8" }),
+      crlfDelay: Infinity,
+    });
   } catch {
     return [];
   }
 
-  const events: SkillInvocationEvent[] = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const ev = JSON.parse(line) as SkillInvocationEvent;
-      // Apply filters at parse time — avoids accumulating excluded events in memory
-      if (options.since && ev.timestamp < options.since) continue;
-      if (options.before && ev.timestamp > options.before) continue;
-      if (options.skill && ev.skillName !== options.skill) continue;
-      if (options.sessionId && ev.sessionId !== options.sessionId) continue;
-      events.push(ev);
-    } catch {
-      // skip malformed lines without losing the rest
+  try {
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      try {
+        const ev = JSON.parse(line) as SkillInvocationEvent;
+        if (!matchesFilter(ev, compiled)) continue;
+        events.push(ev);
+        // Soft cap: keep at most 2×limit in memory, trimming from the old end.
+        if (options.limit != null && events.length > options.limit * 2) {
+          events.splice(0, events.length - options.limit);
+        }
+      } catch {
+        // skip malformed lines without losing the rest
+      }
     }
+  } catch {
+    // stream error mid-read (e.g. file removed) — return what we have
   }
 
-  // Apply limit: keep only the most recent N events
   if (options.limit != null && events.length > options.limit) {
     return events.slice(-options.limit);
   }
   return events;
+}
+
+/**
+ * Read the most recently appended event, if any.
+ * Reads only the tail of the file — used by the hook's dedup window (#70).
+ */
+export async function readLastEvent(
+  dir = getStoreDir()
+): Promise<SkillInvocationEvent | undefined> {
+  const path = eventsPath(dir);
+  let size: number;
+  try {
+    size = (await stat(path)).size;
+  } catch {
+    return undefined;
+  }
+  const TAIL = 8 * 1024;
+  const start = Math.max(0, size - TAIL);
+  const chunks: Buffer[] = [];
+  await new Promise<void>((resolvePromise, reject) => {
+    createReadStream(path, { start })
+      .on("data", (c) => chunks.push(Buffer.from(c)))
+      .on("end", () => resolvePromise())
+      .on("error", reject);
+  }).catch(() => {});
+  const lines = Buffer.concat(chunks)
+    .toString("utf-8")
+    .split("\n")
+    .filter((l) => l.trim());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      return JSON.parse(lines[i]!) as SkillInvocationEvent;
+    } catch {
+      // tail may begin mid-line; keep walking backwards
+    }
+  }
+  return undefined;
 }
 
 // ─── Cross-source deduplication (#182) ───────────────────────────────────────
@@ -165,10 +245,11 @@ export function selectNewEvents(
   return fresh;
 }
 
-export function clearEvents(dir = STORE_DIR): Promise<void> {
+/** Delete all events (truncates the file). */
+export function clearEvents(dir = getStoreDir()): Promise<void> {
   return enqueueWrite(dir, async () => {
     await ensureStoreDir(dir);
-    await writeFile(join(dir, "events.jsonl"), "", "utf-8");
+    await writeFile(eventsPath(dir), "", "utf-8");
   });
 }
 
@@ -185,15 +266,15 @@ export interface BackupResult {
  * already exists it is rotated to `events.jsonl.bak.bak` rather than silently
  * overwritten. Returns `{ backupPath: null }` when there is nothing to back up.
  */
-export function backupEvents(dir = STORE_DIR): Promise<BackupResult> {
+export function backupEvents(dir = getStoreDir()): Promise<BackupResult> {
   return enqueueWrite(dir, async () => {
-    const eventsPath = join(dir, "events.jsonl");
+    const path = eventsPath(dir);
     const bakPath = join(dir, "events.jsonl.bak");
     const bakBakPath = join(dir, "events.jsonl.bak.bak");
 
     let content: string;
     try {
-      content = await readFile(eventsPath, "utf-8");
+      content = await readFile(path, "utf-8");
     } catch {
       // No store file yet — nothing to back up.
       return { backupPath: null, rotatedTo: null };
@@ -220,15 +301,171 @@ export function backupEvents(dir = STORE_DIR): Promise<BackupResult> {
  *  Returns counts of removed and kept events. */
 export function pruneEvents(
   beforeIso: string,
-  dir = STORE_DIR
+  dir = getStoreDir()
 ): Promise<{ removed: number; kept: number }> {
   return enqueueWrite(dir, async () => {
     await ensureStoreDir(dir);
-    const events = await readEvents(dir);
+    const events = await readEvents({ dir });
     const kept = events.filter((e) => e.timestamp >= beforeIso);
     const removed = events.length - kept.length;
     const content = kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : "");
-    await writeFile(join(dir, "events.jsonl"), content, "utf-8");
+    await writeFile(eventsPath(dir), content, "utf-8");
     return { removed, kept: kept.length };
+  });
+}
+
+/**
+ * Apply a patch to the single event with the given ID (#127, #144).
+ * Rewrites the file atomically. Returns true when the event was found.
+ */
+export function updateEvent(
+  id: string,
+  patch: Partial<SkillInvocationEvent> | ((ev: SkillInvocationEvent) => SkillInvocationEvent),
+  dir = getStoreDir()
+): Promise<boolean> {
+  return enqueueWrite(dir, async () => {
+    const events = await readEvents({ dir });
+    let found = false;
+    const next = events.map((ev) => {
+      if (ev.id !== id) return ev;
+      found = true;
+      return typeof patch === "function" ? patch(ev) : { ...ev, ...patch };
+    });
+    if (!found) return false;
+    const path = eventsPath(dir);
+    const tmp = `${path}.tmp`;
+    await writeFile(
+      tmp,
+      next.map((e) => JSON.stringify(e)).join("\n") + (next.length ? "\n" : ""),
+      "utf-8"
+    );
+    await rename(tmp, path);
+    return true;
+  });
+}
+
+/**
+ * Merge events from multiple store directories, de-duplicated by event ID and
+ * sorted by timestamp (#132). The first occurrence of an ID wins.
+ */
+export async function mergeStores(dirs: string[]): Promise<SkillInvocationEvent[]> {
+  const seen = new Set<string>();
+  const merged: SkillInvocationEvent[] = [];
+  for (const dir of dirs) {
+    for (const ev of await readEvents({ dir })) {
+      if (seen.has(ev.id)) continue;
+      seen.add(ev.id);
+      merged.push(ev);
+    }
+  }
+  return merged.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+}
+
+// ─── Store integrity (#175) ──────────────────────────────────────────────────
+
+/** Result of {@link checkStore}. */
+export interface StoreCheckResult {
+  /** Total non-empty lines in events.jsonl. */
+  totalLines: number;
+  /** Lines that parsed as valid events. */
+  validEvents: number;
+  /** 1-based line numbers that failed to parse or lacked required fields. */
+  corruptLines: number[];
+  /** Event IDs that appear more than once. */
+  duplicateIds: string[];
+}
+
+function isValidEvent(value: unknown): value is SkillInvocationEvent {
+  if (!value || typeof value !== "object") return false;
+  const ev = value as Record<string, unknown>;
+  return (
+    typeof ev.id === "string" &&
+    typeof ev.timestamp === "string" &&
+    typeof ev.sessionId === "string" &&
+    typeof ev.skillName === "string" &&
+    typeof ev.source === "string"
+  );
+}
+
+/** Scan events.jsonl for malformed lines and duplicate IDs without modifying it (#175). */
+export async function checkStore(dir = getStoreDir()): Promise<StoreCheckResult> {
+  const result: StoreCheckResult = {
+    totalLines: 0,
+    validEvents: 0,
+    corruptLines: [],
+    duplicateIds: [],
+  };
+  let raw: string;
+  try {
+    raw = await readFile(eventsPath(dir), "utf-8");
+  } catch {
+    return result;
+  }
+  const seen = new Set<string>();
+  const dupes = new Set<string>();
+  const lines = raw.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (!line.trim()) continue;
+    result.totalLines++;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (!isValidEvent(parsed)) {
+        result.corruptLines.push(i + 1);
+        continue;
+      }
+      result.validEvents++;
+      if (seen.has(parsed.id)) dupes.add(parsed.id);
+      seen.add(parsed.id);
+    } catch {
+      result.corruptLines.push(i + 1);
+    }
+  }
+  result.duplicateIds = [...dupes];
+  return result;
+}
+
+/**
+ * Rewrite events.jsonl keeping only valid, first-occurrence events (#175).
+ * The original file is backed up as `events.jsonl.bak` first.
+ */
+export function repairStore(
+  dir = getStoreDir()
+): Promise<{ kept: number; droppedCorrupt: number; droppedDuplicates: number }> {
+  return enqueueWrite(dir, async () => {
+    const path = eventsPath(dir);
+    let raw: string;
+    try {
+      raw = await readFile(path, "utf-8");
+    } catch {
+      return { kept: 0, droppedCorrupt: 0, droppedDuplicates: 0 };
+    }
+    await copyFile(path, `${path}.bak`);
+    const seen = new Set<string>();
+    const kept: string[] = [];
+    let droppedCorrupt = 0;
+    let droppedDuplicates = 0;
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const parsed: unknown = JSON.parse(line);
+        if (!isValidEvent(parsed)) {
+          droppedCorrupt++;
+          continue;
+        }
+        if (seen.has(parsed.id)) {
+          droppedDuplicates++;
+          continue;
+        }
+        seen.add(parsed.id);
+        kept.push(JSON.stringify(parsed));
+      } catch {
+        droppedCorrupt++;
+      }
+    }
+    const tmp = `${path}.tmp`;
+    await writeFile(tmp, kept.join("\n") + (kept.length ? "\n" : ""), "utf-8");
+    await rename(tmp, path);
+    return { kept: kept.length, droppedCorrupt, droppedDuplicates };
   });
 }

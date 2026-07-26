@@ -43,6 +43,12 @@ describe("writeSettingsAtomic", () => {
     assert.deepEqual(JSON.parse(await readFile(target + ".bak", "utf-8")), { version: 1 });
   });
 
+  it("creates missing parent directories (e.g. a fresh machine with no ~/.claude/ yet)", async () => {
+    const target = join(dir, "fresh-machine", "nested", "settings.json");
+    await writeSettingsAtomic(target, { hooks: {} });
+    assert.deepEqual(JSON.parse(await readFile(target, "utf-8")), { hooks: {} });
+  });
+
   it("removes the leftover tmp file when rename fails (#184)", async () => {
     // Make the target an existing directory so rename(tmp, path) fails.
     const target = join(dir, "as-a-dir");

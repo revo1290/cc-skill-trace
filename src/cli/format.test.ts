@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildStats, renderDashboard, renderCompact, vlen } from "./format.js";
+import {
+  buildStats, renderDashboard, renderCompact, vlen,
+  renderStats, renderDiagnose, renderDiff, renderGroupBySession,
+  configureRender, displayName, sortStats,
+} from "./format.js";
 import type { SkillInvocationEvent } from "../core/types.js";
 
 function makeEvent(overrides: Partial<SkillInvocationEvent> = {}): SkillInvocationEvent {
@@ -140,5 +144,109 @@ describe("renderCompact", () => {
     const out = renderCompact(events);
     assert.ok(out.includes("pdf"));
     assert.ok(out.includes("docx"));
+  });
+});
+
+describe("renderStats (#116)", () => {
+  it("shows 'No events yet' for empty input", () => {
+    assert.ok(renderStats([]).includes("No events yet"));
+  });
+
+  it("does not throw and includes streak/hour-of-day sections for populated input", () => {
+    const events = Array.from({ length: 20 }, (_, i) =>
+      makeEvent({
+        id: `ev-${i}`,
+        skillName: i % 2 === 0 ? "pdf" : "docx",
+        sessionId: `sess-${i % 3}`,
+        timestamp: `2026-01-${String((i % 28) + 1).padStart(2, "0")}T${String(i % 24).padStart(2, "0")}:00:00.000Z`,
+      }));
+    const out = renderStats(events);
+    assert.ok(out.includes("Daily activity"));
+    assert.ok(out.includes("Streak"));
+    assert.ok(out.includes("Hour of day"));
+    assert.ok(out.includes("Top sessions"));
+  });
+
+  it("respects the days and limit options", () => {
+    const events = Array.from({ length: 5 }, (_, i) =>
+      makeEvent({ id: `ev-${i}`, sessionId: `sess-${i}`, timestamp: `2026-01-0${i + 1}T00:00:00.000Z` }));
+    assert.doesNotThrow(() => renderStats(events, { days: 3, limit: 2 }));
+  });
+});
+
+describe("renderDiagnose (#41)", () => {
+  it("reports no over-triggering skills for empty input", () => {
+    assert.ok(renderDiagnose([]).includes("No events yet"));
+  });
+
+  it("flags a noisy auto-triggering skill", () => {
+    const events = Array.from({ length: 10 }, (_, i) =>
+      makeEvent({ id: `ev-${i}`, skillName: "noisy", triggerMessage: `m${i}` }));
+    const out = renderDiagnose(events);
+    assert.ok(out.includes("noisy"));
+    assert.ok(out.includes("HIGH"));
+  });
+});
+
+describe("renderDiff (#44)", () => {
+  it("does not throw for non-overlapping periods", () => {
+    const events = [
+      makeEvent({ id: "a", timestamp: "2026-01-01T00:00:00.000Z" }),
+      makeEvent({ id: "b", timestamp: "2026-02-01T00:00:00.000Z" }),
+    ];
+    assert.doesNotThrow(() =>
+      renderDiff(
+        events,
+        { before: "2026-01-31T00:00:00.000Z" },
+        { since: "2026-02-01T00:00:00.000Z" },
+        { a: "January", b: "February" },
+      ));
+  });
+});
+
+describe("renderGroupBySession (#121)", () => {
+  it("groups events under their session ID", () => {
+    const events = [
+      makeEvent({ id: "a", sessionId: "sess-1" }),
+      makeEvent({ id: "b", sessionId: "sess-2" }),
+    ];
+    const out = renderGroupBySession(events);
+    assert.ok(out.includes("sess-1"));
+    assert.ok(out.includes("sess-2"));
+  });
+});
+
+describe("skill aliases (#143)", () => {
+  it("displayName falls back to the raw skill name with no alias configured", () => {
+    configureRender({ aliases: {} });
+    assert.equal(displayName("raw-skill"), "raw-skill");
+  });
+
+  it("displayName uses the configured alias", () => {
+    configureRender({ aliases: { "raw-skill": "Pretty Name" } });
+    assert.equal(displayName("raw-skill"), "Pretty Name");
+    configureRender({ aliases: {} }); // reset for other tests
+  });
+});
+
+describe("sortStats (#103)", () => {
+  const stats = [
+    { name: "b-skill", total: 5, auto: 1, byUser: 4, autoRate: 20 },
+    { name: "a-skill", total: 10, auto: 9, byUser: 1, autoRate: 90 },
+  ];
+
+  it("sorts by count descending by default semantics", () => {
+    const sorted = sortStats(stats, "count");
+    assert.deepEqual(sorted.map((s) => s.name), ["a-skill", "b-skill"]);
+  });
+
+  it("sorts by name alphabetically", () => {
+    const sorted = sortStats(stats, "name");
+    assert.deepEqual(sorted.map((s) => s.name), ["a-skill", "b-skill"]);
+  });
+
+  it("sorts by auto-trigger rate descending", () => {
+    const sorted = sortStats(stats, "auto");
+    assert.deepEqual(sorted.map((s) => s.name), ["a-skill", "b-skill"]);
   });
 });

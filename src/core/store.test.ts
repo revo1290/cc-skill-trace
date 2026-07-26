@@ -5,7 +5,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
-import { appendEvent, readEvents, clearEvents, pruneEvents, backupEvents, pendingWriteQueueCount, selectNewEvents, DEDUP_WINDOW_MS } from "./store.js";
+import {
+  appendEvent, readEvents, clearEvents, pruneEvents, backupEvents, pendingWriteQueueCount, selectNewEvents, DEDUP_WINDOW_MS,
+  checkStore, repairStore, updateEvent, mergeStores, readLastEvent,
+} from "./store.js";
 import type { SkillInvocationEvent } from "./types.js";
 
 function makeEvent(overrides: Partial<SkillInvocationEvent> = {}): SkillInvocationEvent {
@@ -313,6 +316,117 @@ describe("store", () => {
       // Candidates are only compared against `existing`, never each other, so both survive.
       const fresh = selectNewEvents([], [first, second]);
       assert.deepEqual(fresh.map((e) => e.id).sort(), ["toolu_1", "toolu_2"]);
+    });
+  });
+
+  describe("appendEvent schema stamping (#94)", () => {
+    it("stamps the current schema version on write", async () => {
+      const vDir = dir + "-schema";
+      await appendEvent(makeEvent({ id: "v-test" }), vDir);
+      const [ev] = await readEvents(vDir);
+      assert.equal(ev!.v, 2);
+    });
+  });
+
+  describe("readLastEvent (#70)", () => {
+    it("returns undefined for a missing store", async () => {
+      assert.equal(await readLastEvent(dir + "-missing-last"), undefined);
+    });
+
+    it("returns the most recently appended event", async () => {
+      const lastDir = dir + "-last";
+      await appendEvent(makeEvent({ id: "first" }), lastDir);
+      await appendEvent(makeEvent({ id: "second" }), lastDir);
+      const last = await readLastEvent(lastDir);
+      assert.equal(last?.id, "second");
+    });
+  });
+
+  describe("updateEvent (#127, #144)", () => {
+    it("applies a partial patch to the matching event", async () => {
+      const upDir = dir + "-update";
+      await appendEvent(makeEvent({ id: "target" }), upDir);
+      const found = await updateEvent("target", { outcome: "ok", durationMs: 42 }, upDir);
+      assert.equal(found, true);
+      const [ev] = await readEvents(upDir);
+      assert.equal(ev!.outcome, "ok");
+      assert.equal(ev!.durationMs, 42);
+    });
+
+    it("applies a function patch", async () => {
+      const upDir = dir + "-update-fn";
+      await appendEvent(makeEvent({ id: "target" }), upDir);
+      await updateEvent("target", (ev) => ({ ...ev, tags: [...(ev.tags ?? []), "reviewed"] }), upDir);
+      const [ev] = await readEvents(upDir);
+      assert.deepEqual(ev!.tags, ["reviewed"]);
+    });
+
+    it("returns false when the event ID does not exist", async () => {
+      const upDir = dir + "-update-missing";
+      await appendEvent(makeEvent({ id: "x" }), upDir);
+      const found = await updateEvent("does-not-exist", { outcome: "ok" }, upDir);
+      assert.equal(found, false);
+    });
+  });
+
+  describe("mergeStores (#132)", () => {
+    it("merges events from multiple directories, deduping by ID, sorted by timestamp", async () => {
+      const dirA = dir + "-merge-a";
+      const dirB = dir + "-merge-b";
+      await appendEvent(makeEvent({ id: "shared", timestamp: "2026-01-01T00:00:00.000Z" }), dirA);
+      await appendEvent(makeEvent({ id: "shared", timestamp: "2026-01-01T00:00:00.000Z" }), dirB);
+      await appendEvent(makeEvent({ id: "only-in-b", timestamp: "2026-01-02T00:00:00.000Z" }), dirB);
+      const merged = await mergeStores([dirA, dirB]);
+      assert.deepEqual(merged.map((e) => e.id), ["shared", "only-in-b"]);
+    });
+  });
+
+  describe("checkStore / repairStore (#175)", () => {
+    it("reports a clean store as having zero corrupt lines and no duplicates", async () => {
+      const checkDir = dir + "-check-clean";
+      await appendEvent(makeEvent({ id: "a" }), checkDir);
+      await appendEvent(makeEvent({ id: "b" }), checkDir);
+      const result = await checkStore(checkDir);
+      assert.equal(result.validEvents, 2);
+      assert.deepEqual(result.corruptLines, []);
+      assert.deepEqual(result.duplicateIds, []);
+    });
+
+    it("detects corrupt lines and duplicate IDs without modifying the file", async () => {
+      const checkDir = dir + "-check-corrupt";
+      await appendEvent(makeEvent({ id: "a" }), checkDir);
+      const path = join(checkDir, "events.jsonl");
+      await appendFile(path, "NOT VALID JSON\n", "utf-8");
+      await appendFile(path, `${JSON.stringify(makeEvent({ id: "a" }))}\n`, "utf-8");
+
+      const before = await readFile(path, "utf-8");
+      const result = await checkStore(checkDir);
+      assert.equal(result.corruptLines.length, 1);
+      assert.deepEqual(result.duplicateIds, ["a"]);
+      assert.equal(await readFile(path, "utf-8"), before, "checkStore must not modify the file");
+    });
+
+    it("repairStore drops corrupt/duplicate lines and backs up the original", async () => {
+      const repairDir = dir + "-repair";
+      await appendEvent(makeEvent({ id: "a" }), repairDir);
+      const path = join(repairDir, "events.jsonl");
+      await appendFile(path, "NOT VALID JSON\n", "utf-8");
+      await appendFile(path, `${JSON.stringify(makeEvent({ id: "a" }))}\n`, "utf-8");
+
+      const result = await repairStore(repairDir);
+      assert.equal(result.kept, 1);
+      assert.equal(result.droppedCorrupt, 1);
+      assert.equal(result.droppedDuplicates, 1);
+
+      const events = await readEvents(repairDir);
+      assert.deepEqual(events.map((e) => e.id), ["a"]);
+      const backup = await readFile(`${path}.bak`, "utf-8");
+      assert.ok(backup.includes("NOT VALID JSON"));
+    });
+
+    it("repairStore on a missing store is a no-op", async () => {
+      const result = await repairStore(dir + "-repair-missing");
+      assert.deepEqual(result, { kept: 0, droppedCorrupt: 0, droppedDuplicates: 0 });
     });
   });
 });

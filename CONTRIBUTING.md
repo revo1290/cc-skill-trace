@@ -16,15 +16,30 @@ npm test
 ## Development workflow
 
 ```bash
-npm run dev        # watch mode (recompiles on save)
-npm run typecheck  # type-check without emitting
-npm test           # run the test suite
+npm run dev         # watch mode (recompiles on save)
+npm run typecheck   # type-check without emitting
+npm run lint        # biome lint
+npm run format:check  # biome format check (npm run format to auto-fix)
+npm test            # full test suite (includes CLI integration tests)
+npm run test:unit   # unit tests only, skips the subprocess-spawning CLI integration suite
 ```
 
 The CLI can be tested locally with:
 ```bash
 node dist/cli/index.js show
 node dist/cli/index.js --help
+```
+
+Or directly from source without building, via `tsx`:
+```bash
+node --import tsx/esm src/cli/index.ts show
+```
+
+To test install/uninstall/hook-capture without touching your real Claude Code
+settings, sandbox `HOME`, `CC_STORE_DIR` and `CC_PROJECTS_DIR`:
+```bash
+HOME=/tmp/cc-sandbox CC_STORE_DIR=/tmp/cc-sandbox/store CC_PROJECTS_DIR=/tmp/cc-sandbox/projects \
+  node dist/cli/index.js install
 ```
 
 ## Submitting changes
