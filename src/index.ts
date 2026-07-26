@@ -28,6 +28,7 @@ export {
   extractInvocationsFromFile,
   isClaudeSessionFile,
   listSessionFiles,
+  validateProjectsDir,
 } from "./core/parser.js";
 export type { ExtractOptions, ExtractAllOptions } from "./core/parser.js";
 export { expandTilde } from "./core/utils.js";

@@ -83,9 +83,14 @@ src/
 - `CC_STORE_DIR` / `--store` でイベントストアの場所を切り替え可能
 - `CC_DEBUG=1` または `--verbose` で診断ログを stderr に出力
 - `CC_SCAN_CONCURRENCY` 環境変数でスキャン並列数を変更（デフォルト: 8）
-- `CC_PROJECTS_DIR` 環境変数でスキャン対象ディレクトリを変更（先頭の `~/` はホームディレクトリに展開される）
+- `CC_PROJECTS_DIR` 環境変数でスキャン対象ディレクトリを変更（先頭の `~/` はホームディレクトリに展開される。`/etc`,`/sys`,`/proc`,`/dev` 配下は `validateProjectsDir` が拒否する、#147）
 - SKILL.md は `dist/skill/SKILL.md`（ビルド時に `scripts/copy-skill.mjs` がコピー）を優先し、`src/skill/SKILL.md`（`files` で同梱）にフォールバック
 - `install`/`uninstall` は settings.json の hook を `hooks[].command` フィールドの完全一致で判定（`isCcSkillTraceHook`）。他ツールのフックを誤って触らない
+
+### 並行安全性の設計方針 (#161)
+
+- `appendEvent` は `fs.appendFile`（O_APPEND）のみを使う純粋な追記操作。POSIX では PIPE_BUF 未満の単一 write は複数プロセスからでも atomic であり、本ツールが書き込む1イベント分の JSON 行はこれを大きく下回るため、**複数の `hook-capture` プロセスが同時に起動しても行の破損・上書きは起きない**。`src/cli/integration.test.ts` の「hook-capture cross-process concurrency」テストで実プロセスを並行起動して検証している。
+- `pruneEvents`/`clearEvents`/`updateEvent`/`repairStore` は read-modify-write（全件読み込み→書き換え）であり、こちらは **プロセス内** の直列化（`enqueueWrite` の per-dir promise チェーン）のみを保証する。これらはユーザーが明示的に叩く CLI コマンドであり、同一ストアに対して複数プロセスから真に同時実行される可能性は低いと判断し、クロスプロセスのファイルロックは意図的に導入していない（同時実行するとどちらか一方の変更が失われ得る、という制約は許容している）。
 
 ### hook-capture と triggerMessage の制限
 

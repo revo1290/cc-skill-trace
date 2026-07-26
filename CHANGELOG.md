@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0]
 
+### Upgrading from 1.x
+
+No action required for most users — `npm install -g cc-skill-trace@latest && cc-skill-trace install` re-syncs the hooks (now Pre **and** Post) and `SKILL.md`, and existing `events.jsonl` files (v1, no `v` field) continue to be read normally alongside new v2 events. Two behavioral changes worth knowing about:
+- `uninstall` now removes only cc-skill-trace's own hook entries instead of the whole `PreToolUse` array — if you were relying on the old (overly broad) removal behavior, re-check `settings.json` after upgrading.
+- `scan --clear` now writes a `events.jsonl.bak` backup before clearing; harmless, but note the new file if you scripted around the store directory's contents.
+
 A major release focused on closing out the long-standing issue backlog: new
 commands for diagnosis, health-checking and CI gating; a richer event schema
 (outcomes, tags, provenance); persistent configuration; a redesigned HTML

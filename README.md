@@ -213,6 +213,27 @@ cc-skill-trace completion zsh >> ~/.zshrc   # shell completion: bash | zsh | fis
 
 ## How it works
 
+```
+┌─────────────────┐   PreToolUse/PostToolUse hooks    ┌──────────────────────┐
+│   Claude Code    │ ─────────────────────────────────▶ │  hook-capture (CLI)  │
+│  (Skill tool)     │  fire on every skill invocation    │  never blocks; 0-exit │
+└─────────────────┘                                     └──────────┬───────────┘
+                                                                     │ append
+                                                                     ▼
+┌──────────────────────┐   parse & backfill    ┌───────────────────────────────┐
+│ ~/.claude/projects/    │ ─────────────────────▶ │  ~/.cc-skill-trace/events.jsonl │
+│  **/*.jsonl session logs│  cc-skill-trace scan   │  (local only; JSON Lines)        │
+└──────────────────────┘                        └───────────────┬────────────────┘
+                                                                   │ read + filter
+                          ┌────────────────────────────────────────┼───────────────────────┐
+                          ▼                                        ▼                        ▼
+                 ┌─────────────────┐                    ┌──────────────────┐      ┌──────────────────┐
+                 │ terminal dashboard│                    │  HTML report       │      │  export / API      │
+                 │  show / stats /   │                    │  report --theme … │      │  json / csv / sql /│
+                 │  diagnose / doctor│                    │  (standalone file)│      │  programmatic API   │
+                 └─────────────────┘                    └──────────────────┘      └──────────────────┘
+```
+
 ### 1. Real-time capture (Pre/PostToolUse hooks)
 
 `cc-skill-trace install` adds the following to `~/.claude/settings.json`:

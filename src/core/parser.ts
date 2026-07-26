@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { estimateTokens } from "./analyze.js";
 import { expandTilde } from "./utils.js";
@@ -13,10 +13,33 @@ import type {
   ToolUse,
 } from "./types.js";
 
+// Directories a scan should never be pointed at, even if CC_PROJECTS_DIR asks
+// for them. The real-world risk is low — the env var is set by the same user
+// running the CLI, not an attacker — but rejecting these outright costs
+// nothing and matches OSS best practice (#147).
+const DISALLOWED_PROJECTS_DIRS = ["/etc", "/sys", "/proc", "/dev"];
+
+/**
+ * Resolve and validate a candidate CC_PROJECTS_DIR value: expands `~`,
+ * normalizes to an absolute path, and rejects a handful of clearly
+ * inappropriate system directories (#147).
+ * @throws {Error} if the resolved path is one of the disallowed roots.
+ */
+export function validateProjectsDir(raw: string): string {
+  const resolved = resolve(expandTilde(raw));
+  const isDisallowed = DISALLOWED_PROJECTS_DIRS.some(
+    (d) => resolved === d || resolved.startsWith(d + sep)
+  );
+  if (isDisallowed) {
+    throw new Error(`CC_PROJECTS_DIR "${resolved}" is not allowed for security reasons`);
+  }
+  return resolved;
+}
+
 // Read at call time so tests and CLI can override via CC_PROJECTS_DIR at runtime (#38)
 function getProjectsDir(): string {
   const raw = process.env.CC_PROJECTS_DIR ?? join(homedir(), ".claude", "projects");
-  return expandTilde(raw);
+  return validateProjectsDir(raw);
 }
 
 function escapeRegExp(s: string): string {
@@ -129,14 +152,22 @@ export interface SessionFileInfo {
  */
 export async function listSessionFiles(sessionId?: string): Promise<SessionFileInfo[]> {
   const files: SessionFileInfo[] = [];
+  // A rejected (dangerous) CC_PROJECTS_DIR should be a loud, visible error —
+  // not silently swallowed into "no session files found" (#147).
+  const projectsDir = getProjectsDir();
   let projectDirs: string[];
   try {
-    projectDirs = await readdir(getProjectsDir());
-  } catch {
+    projectDirs = await readdir(projectsDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      process.stderr.write(
+        `[cc-skill-trace] Warning: CC_PROJECTS_DIR "${projectsDir}" does not exist\n`
+      );
+    }
     return files;
   }
   for (const projectDir of projectDirs) {
-    const projectPath = join(getProjectsDir(), projectDir);
+    const projectPath = join(projectsDir, projectDir);
     try {
       const s = await stat(projectPath);
       if (!s.isDirectory()) continue;

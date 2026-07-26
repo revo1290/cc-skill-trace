@@ -1,5 +1,6 @@
 ---
 name: skill-trace
+version: 1
 description: >
   Skill invocation history for Claude Code (auto vs user).
   Invoke ONLY on explicit user request about skill history or /skill-trace.

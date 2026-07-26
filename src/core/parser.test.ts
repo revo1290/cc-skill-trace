@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractInvocationsFromFile, extractAllInvocations, isClaudeSessionFile, mapWithLimit } from "./parser.js";
+import { extractInvocationsFromFile, extractAllInvocations, isClaudeSessionFile, mapWithLimit, validateProjectsDir, listSessionFiles } from "./parser.js";
+import { homedir } from "node:os";
 
 function jsonl(entries: object[]): string {
   return entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
@@ -367,5 +368,53 @@ describe("extractAllInvocations sessionId filtering (#188)", () => {
     assert.equal(events.length, 1);
     assert.equal(events[0].sessionId, "sess-C");
     assert.equal(events[0].skillName, "csv");
+  });
+});
+
+describe("validateProjectsDir (#147)", () => {
+  it("rejects /etc, /sys, /proc and /dev outright", () => {
+    for (const dangerous of ["/etc", "/sys", "/proc", "/dev"]) {
+      assert.throws(() => validateProjectsDir(dangerous), /not allowed for security reasons/);
+    }
+  });
+
+  it("rejects subdirectories of disallowed roots", () => {
+    assert.throws(() => validateProjectsDir("/etc/ssh"), /not allowed for security reasons/);
+  });
+
+  it("does not false-positive on a sibling path with the same prefix", () => {
+    // "/etcetera" starts with "/etc" as a string but is not under /etc — must be allowed.
+    assert.doesNotThrow(() => validateProjectsDir("/etcetera/projects"));
+  });
+
+  it("expands a leading ~ before validating", () => {
+    assert.equal(validateProjectsDir("~/my-projects"), join(homedir(), "my-projects"));
+  });
+
+  it("allows ordinary user directories", () => {
+    assert.doesNotThrow(() => validateProjectsDir("/home/user/.claude/projects"));
+  });
+});
+
+describe("listSessionFiles missing-directory handling (#147)", () => {
+  it("returns empty and warns on stderr when CC_PROJECTS_DIR does not exist", async () => {
+    const prev = process.env["CC_PROJECTS_DIR"];
+    const missing = join(tmpdir(), `cc-skill-trace-does-not-exist-${Date.now()}`);
+    process.env["CC_PROJECTS_DIR"] = missing;
+    const chunks: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const files = await listSessionFiles();
+      assert.deepEqual(files, []);
+      assert.ok(chunks.some((c) => c.includes(missing) && c.includes("does not exist")));
+    } finally {
+      process.stderr.write = originalWrite;
+      if (prev === undefined) delete process.env["CC_PROJECTS_DIR"];
+      else process.env["CC_PROJECTS_DIR"] = prev;
+    }
   });
 });

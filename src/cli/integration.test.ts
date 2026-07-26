@@ -4,7 +4,7 @@
 // payload handling) rather than individual functions in isolation (#17, #58, #61).
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -174,5 +174,45 @@ describe("CLI integration", () => {
     const commands = JSON.stringify(after.hooks.PreToolUse);
     assert.ok(!commands.includes("cc-skill-trace"));
     assert.ok(commands.includes("some-other-tool --check"));
+  });
+});
+
+describe("hook-capture cross-process concurrency (#161)", () => {
+  // appendEvent uses fs.appendFile (O_APPEND), which POSIX guarantees is
+  // atomic for writes below PIPE_BUF — this stress test spawns many real
+  // `hook-capture` *processes* concurrently (not just concurrent promises in
+  // one process) to verify that guarantee holds in practice: every event
+  // survives and events.jsonl parses cleanly with no torn/interleaved lines.
+  it("N concurrent hook-capture processes each append exactly one clean event", async () => {
+    const root = await mkdtemp(join(tmpdir(), "cc-skill-trace-concurrency-test-"));
+    const store = join(root, "store");
+    await mkdir(store, { recursive: true });
+    const env = { ...process.env, CC_STORE_DIR: store, NO_COLOR: "1" };
+
+    const N = 15;
+    const runOne = (i: number) =>
+      new Promise<void>((resolvePromise, reject) => {
+        const child = spawn("node", ["--import", "tsx/esm", CLI_ENTRY, "hook-capture"], { env });
+        const payload = JSON.stringify({
+          session_id: `concurrent-sess-${i}`,
+          tool_name: "Skill",
+          tool_input: { skill: `skill-${i}` },
+          user_invoked: false,
+        });
+        child.stdin.end(payload);
+        child.on("error", reject);
+        child.on("exit", (code) => (code === 0 ? resolvePromise() : reject(new Error(`exit ${code}`))));
+      });
+
+    await Promise.all(Array.from({ length: N }, (_, i) => runOne(i)));
+
+    const raw = await readFile(join(store, "events.jsonl"), "utf-8");
+    const lines = raw.split("\n").filter((l) => l.trim());
+    assert.equal(lines.length, N, "every process's event must be present with no torn/lost lines");
+    const parsed = lines.map((l) => JSON.parse(l)); // throws if any line is corrupted/interleaved
+    const sessions = new Set(parsed.map((e) => e.sessionId));
+    assert.equal(sessions.size, N, "each event must be distinct — no duplicates or overwrites");
+
+    await rm(root, { recursive: true, force: true });
   });
 });
