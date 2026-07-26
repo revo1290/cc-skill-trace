@@ -32,3 +32,137 @@ jobs:
       - run: npm run lint
       - run: npm run format:check
       - run: npm test
+
+  # Cross-platform smoke: the full suite spawns real subprocesses and touches
+  # the filesystem (paths, line endings, settings.json), so Linux-only CI
+  # cannot catch platform-specific regressions (#176).
+  cross-platform:
+    name: Cross-platform (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  coverage:
+    name: Test coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      # Node's built-in coverage reporter (stable since Node 20) — no extra
+      # dependency needed. Enforces a floor so coverage can't silently regress (#62, #151).
+      - name: Run tests with coverage
+        run: |
+          UNIT_TESTS=$(find src -name '*.test.ts' ! -name 'integration.test.ts' | sort)
+          # --test-coverage-exclude requires a newer Node point release than
+          # actions/setup-node's `20` resolves to in some CI images; the
+          # unfiltered summary (test files included) is good enough for a
+          # floor check and avoids depending on that flag being present.
+          node --import tsx/esm --experimental-test-coverage \
+            --test $UNIT_TESTS | tee coverage-output.txt
+      - name: Enforce coverage floor
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const out = fs.readFileSync("coverage-output.txt", "utf-8");
+            const m = out.match(/all files\s*\|\s*([\d.]+)/i);
+            if (!m) { console.error("Could not parse coverage summary"); process.exit(1); }
+            const pct = parseFloat(m[1]);
+            const floor = 70;
+            console.log(`Overall line coverage: ${pct}% (floor: ${floor}%)`);
+            if (pct < floor) { console.error(`Coverage ${pct}% is below the ${floor}% floor`); process.exit(1); }
+          '
+
+  # Verifies the tarball that `npm publish` would actually ship: file list is
+  # as expected (no stray source/config leaking in, nothing required missing)
+  # and the size stays within budget (#72, #88).
+  pack-check:
+    name: Package contents & size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: npm pack --dry-run
+        run: npm pack --dry-run --json > pack-output.json
+
+      - name: Verify expected files are present and size budget is met
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const [pkg] = JSON.parse(fs.readFileSync("pack-output.json", "utf-8"));
+            const files = pkg.files.map(f => f.path);
+            const required = ["dist/cli/index.js", "dist/index.js", "src/skill/SKILL.md", "package.json"];
+            const missing = required.filter(r => !files.includes(r));
+            if (missing.length) { console.error("Missing required files in package:", missing); process.exit(1); }
+            const unpackedKB = pkg.unpackedSize / 1024;
+            const budgetKB = 2048; // 2 MB — generous headroom over the current ~300 KB
+            console.log(`Unpacked size: ${unpackedKB.toFixed(1)} KB (budget: ${budgetKB} KB)`);
+            console.log(`File count: ${files.length}`);
+            if (unpackedKB > budgetKB) { console.error(`Package size ${unpackedKB.toFixed(1)} KB exceeds ${budgetKB} KB budget`); process.exit(1); }
+          '
+
+  # "Are the Types Wrong?" — catches ESM/CJS resolution and exports-map
+  # mistakes that typecheck alone cannot see (#167).
+  attw:
+    name: Are the Types Wrong?
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npx --yes @arethetypeswrong/cli --pack . --ignore-rules cjs-resolves-to-esm
+
+  benchmark:
+    name: CLI startup benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      # Informational: prints startup latency for `--version` (no store/scan
+      # I/O) across a few runs so a regression is visible in the job log (#125).
+      - name: Measure startup time
+        run: |
+          for i in 1 2 3 4 5; do
+            /usr/bin/time -f "run $i: %e s" node dist/cli/index.js --version 2>&1 | tail -1
+          done

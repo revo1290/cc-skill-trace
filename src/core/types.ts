@@ -43,6 +43,8 @@ export interface SessionLogEntry {
   timestamp: string;
   sessionId?: string;
   uuid?: string;
+  cwd?: string;
+  gitBranch?: string;
   /**
    * Entry-level flag set by Claude Code when the invocation was triggered by a
    * user slash command. Preferred over regex inference of `source` (#177).
@@ -59,12 +61,29 @@ export interface SessionLogEntry {
 
 // ─── cc-skill-trace event types ─────────────────────────────────────────────
 
+/**
+ * Current version of the on-disk event schema (#94).
+ * - v1 (implicit, no `v` field): original schema up to cc-skill-trace 1.x
+ * - v2: adds `v`, `recordedVia`, `tags`, `outcome`, `durationMs`
+ *
+ * Readers MUST accept events without a `v` field and treat them as v1.
+ */
+export const EVENT_SCHEMA_VERSION = 2;
+
 export type InvocationSource = "user" | "claude" | "unknown";
+
+/** How an event entered the store: real-time hook capture or retroactive scan (#148). */
+export type RecordedVia = "hook" | "scan";
+
+/** Result of a skill invocation, when known via the PostToolUse hook (#144). */
+export type InvocationOutcome = "ok" | "error";
 
 /** Stored in ~/.cc-skill-trace/events.jsonl */
 export interface SkillInvocationEvent {
   /** Unique event ID */
   id: string;
+  /** Event schema version (#94). Absent on legacy v1 events. */
+  v?: number;
   /** ISO timestamp when the skill was invoked */
   timestamp: string;
   /** Claude Code session ID */
@@ -83,9 +102,17 @@ export interface SkillInvocationEvent {
   cwd?: string;
   /** Git branch at time of invocation */
   gitBranch?: string;
+  /** How the event was recorded: real-time hook or retroactive scan (#148) */
+  recordedVia?: RecordedVia;
+  /** User-assigned labels, e.g. "false-positive" (#127) */
+  tags?: string[];
+  /** Invocation result reported by the PostToolUse hook (#144) */
+  outcome?: InvocationOutcome;
+  /** Milliseconds between PreToolUse and PostToolUse hooks, when both fired (#144) */
+  durationMs?: number;
 }
 
-// ─── Hook stdin payload (PreToolUse) ────────────────────────────────────────
+// ─── Hook stdin payload (PreToolUse / PostToolUse) ──────────────────────────
 
 export interface HookPayload {
   session_id: string;
@@ -97,6 +124,8 @@ export interface HookPayload {
   };
   /** Present when the invocation was triggered by a user slash command */
   user_invoked?: boolean;
+  /** PostToolUse only: the tool's response (shape varies by tool) */
+  tool_response?: unknown;
   cwd?: string;
   git_branch?: string;
 }

@@ -4,11 +4,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-// Read the bundled SKILL.md next to this test file.
+// Read the bundled SKILL.md next to this test file. Normalize CRLF → LF so a
+// Windows checkout with core.autocrlf=true (which rewrites the file's line
+// endings) doesn't break the ```bash fence regex below.
 const skillMd = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), "SKILL.md"),
   "utf-8"
-);
+).replace(/\r\n/g, "\n");
 
 // Extract the first fenced ```bash block — this is the install check run by /skill-trace.
 const bashBlock = skillMd.match(/```bash\n([\s\S]*?)```/)?.[1] ?? "";

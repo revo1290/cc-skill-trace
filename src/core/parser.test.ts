@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractInvocationsFromFile, extractAllInvocations, isClaudeSessionFile } from "./parser.js";
+import { extractInvocationsFromFile, extractAllInvocations, isClaudeSessionFile, mapWithLimit, validateProjectsDir, listSessionFiles } from "./parser.js";
+import { homedir } from "node:os";
 
 function jsonl(entries: object[]): string {
   return entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
@@ -233,6 +234,87 @@ describe("extractInvocationsFromFile", () => {
     assert.ok(events[0].injectedTokens != null, "injectedTokens should be populated");
     assert.ok((events[0].injectedTokens ?? 0) > 0, "injectedTokens should be positive");
   });
+
+  it("respects triggerMaxLen option (#120)", async () => {
+    const file = join(dir, "custom-max-len.jsonl");
+    await writeFile(file, jsonl([userMsg("x".repeat(100)), assistantSkill("cap-test")]));
+    const events = await extractInvocationsFromFile(file, { triggerMaxLen: 20 });
+    assert.equal(events[0]!.triggerMessage!.length, 20);
+  });
+
+  it("omits triggerMessage when captureTriggerMessages is false (#74)", async () => {
+    const file = join(dir, "no-capture.jsonl");
+    await writeFile(file, jsonl([userMsg("sensitive request"), assistantSkill("privacy-test")]));
+    const events = await extractInvocationsFromFile(file, { captureTriggerMessages: false });
+    assert.equal(events[0]!.triggerMessage, undefined);
+  });
+
+  it("stamps recordedVia as 'scan' and carries cwd/gitBranch from the assistant entry", async () => {
+    const file = join(dir, "cwd-branch.jsonl");
+    await writeFile(file, jsonl([
+      userMsg("help"),
+      {
+        type: "message",
+        timestamp: "2026-01-01T00:00:01.000Z",
+        sessionId: "sess-1",
+        cwd: "/repo",
+        gitBranch: "main",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tu-meta", name: "Skill", input: { skill: "meta-test" } }],
+        },
+      },
+    ]));
+    const events = await extractInvocationsFromFile(file);
+    assert.equal(events[0]!.recordedVia, "scan");
+    assert.equal(events[0]!.cwd, "/repo");
+    assert.equal(events[0]!.gitBranch, "main");
+  });
+});
+
+describe("mapWithLimit (#138)", () => {
+  it("resolves results in input order regardless of completion order", async () => {
+    const items = [30, 10, 20];
+    const results = await mapWithLimit(items, 3, async (ms) => {
+      await new Promise((r) => setTimeout(r, ms));
+      return ms;
+    });
+    assert.deepEqual(results, [30, 10, 20]);
+  });
+
+  it("never runs more than `limit` tasks concurrently", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const items = Array.from({ length: 10 }, (_, i) => i);
+    await mapWithLimit(items, 3, async (i) => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active--;
+      return i;
+    });
+    assert.ok(maxActive <= 3, `expected at most 3 concurrent, saw ${maxActive}`);
+  });
+
+  it("handles an empty input array", async () => {
+    const results = await mapWithLimit([], 5, async (x) => x);
+    assert.deepEqual(results, []);
+  });
+
+  it("handles limit greater than the number of items", async () => {
+    const results = await mapWithLimit([1, 2], 10, async (x) => x * 2);
+    assert.deepEqual(results, [2, 4]);
+  });
+
+  it("propagates a rejection from any task", async () => {
+    await assert.rejects(
+      mapWithLimit([1, 2, 3], 2, async (x) => {
+        if (x === 2) throw new Error("boom");
+        return x;
+      }),
+      /boom/,
+    );
+  });
 });
 
 describe("extractAllInvocations sessionId filtering (#188)", () => {
@@ -286,5 +368,53 @@ describe("extractAllInvocations sessionId filtering (#188)", () => {
     assert.equal(events.length, 1);
     assert.equal(events[0].sessionId, "sess-C");
     assert.equal(events[0].skillName, "csv");
+  });
+});
+
+describe("validateProjectsDir (#147)", () => {
+  it("rejects /etc, /sys, /proc and /dev outright", () => {
+    for (const dangerous of ["/etc", "/sys", "/proc", "/dev"]) {
+      assert.throws(() => validateProjectsDir(dangerous), /not allowed for security reasons/);
+    }
+  });
+
+  it("rejects subdirectories of disallowed roots", () => {
+    assert.throws(() => validateProjectsDir("/etc/ssh"), /not allowed for security reasons/);
+  });
+
+  it("does not false-positive on a sibling path with the same prefix", () => {
+    // "/etcetera" starts with "/etc" as a string but is not under /etc — must be allowed.
+    assert.doesNotThrow(() => validateProjectsDir("/etcetera/projects"));
+  });
+
+  it("expands a leading ~ before validating", () => {
+    assert.equal(validateProjectsDir("~/my-projects"), join(homedir(), "my-projects"));
+  });
+
+  it("allows ordinary user directories", () => {
+    assert.doesNotThrow(() => validateProjectsDir("/home/user/.claude/projects"));
+  });
+});
+
+describe("listSessionFiles missing-directory handling (#147)", () => {
+  it("returns empty and warns on stderr when CC_PROJECTS_DIR does not exist", async () => {
+    const prev = process.env["CC_PROJECTS_DIR"];
+    const missing = join(tmpdir(), `cc-skill-trace-does-not-exist-${Date.now()}`);
+    process.env["CC_PROJECTS_DIR"] = missing;
+    const chunks: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const files = await listSessionFiles();
+      assert.deepEqual(files, []);
+      assert.ok(chunks.some((c) => c.includes(missing) && c.includes("does not exist")));
+    } finally {
+      process.stderr.write = originalWrite;
+      if (prev === undefined) delete process.env["CC_PROJECTS_DIR"];
+      else process.env["CC_PROJECTS_DIR"] = prev;
+    }
   });
 });

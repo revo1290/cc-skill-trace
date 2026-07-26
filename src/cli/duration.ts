@@ -18,7 +18,7 @@ export function parseDuration(value: string): Date {
     process.exit(1);
   }
   const n = parseInt(match[1]!, 10);
-  const unit = match[2]!.toLowerCase();
+  const unit = match[2]?.toLowerCase();
   const cutoff = new Date();
   if (unit === "min") cutoff.setMinutes(cutoff.getMinutes() - n);
   else if (unit === "h") cutoff.setHours(cutoff.getHours() - n);

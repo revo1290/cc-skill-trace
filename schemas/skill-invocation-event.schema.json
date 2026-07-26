@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/revo1290/cc-skill-trace/blob/main/schemas/skill-invocation-event.schema.json",
+  "title": "SkillInvocationEvent",
+  "description": "One line of ~/.cc-skill-trace/events.jsonl — a single Claude Code skill invocation. Mirrors src/core/types.ts; kept in sync by hand (#106).",
+  "type": "object",
+  "required": ["id", "timestamp", "sessionId", "skillName", "source"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique event ID. The tool_use block ID when scanned from a session log, or a random UUID when captured live by the hook."
+    },
+    "v": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Event schema version. Absent on legacy v1 events written before this field existed; readers must treat a missing v as 1."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of the invocation."
+    },
+    "sessionId": {
+      "type": "string",
+      "description": "Claude Code session ID this invocation belongs to."
+    },
+    "skillName": {
+      "type": "string",
+      "description": "Name of the invoked skill, as passed to the Skill tool."
+    },
+    "skillArgs": {
+      "type": "string",
+      "description": "Arguments passed to the skill invocation, if any."
+    },
+    "source": {
+      "type": "string",
+      "enum": ["user", "claude", "unknown"],
+      "description": "\"user\" for an explicit /skill-name slash command, \"claude\" when Claude auto-invoked the skill."
+    },
+    "triggerMessage": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "The user message that immediately preceded this invocation, truncated. Omitted when capture is disabled (#74) or unavailable (hook-captured events without a scan backfill)."
+    },
+    "injectedTokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Estimated token count of the skill content injected into context."
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Working directory at time of invocation."
+    },
+    "gitBranch": {
+      "type": "string",
+      "description": "Git branch at time of invocation."
+    },
+    "recordedVia": {
+      "type": "string",
+      "enum": ["hook", "scan"],
+      "description": "How the event entered the store: real-time PreToolUse hook capture, or retroactive session-log scan."
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "User-assigned labels, e.g. \"false-positive\" (#127)."
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["ok", "error"],
+      "description": "Invocation result reported by the PostToolUse hook (#144)."
+    },
+    "durationMs": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Milliseconds between the PreToolUse and PostToolUse hooks, when both fired (#144)."
+    }
+  }
+}

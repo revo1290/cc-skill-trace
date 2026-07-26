@@ -7,7 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## [2.0.0]
+
+### Upgrading from 1.x
+
+No action required for most users — `npm install -g cc-skill-trace@latest && cc-skill-trace install` re-syncs the hooks (now Pre **and** Post) and `SKILL.md`, and existing `events.jsonl` files (v1, no `v` field) continue to be read normally alongside new v2 events. Two behavioral changes worth knowing about:
+- `uninstall` now removes only cc-skill-trace's own hook entries instead of the whole `PreToolUse` array — if you were relying on the old (overly broad) removal behavior, re-check `settings.json` after upgrading.
+- `scan --clear` now writes a `events.jsonl.bak` backup before clearing; harmless, but note the new file if you scripted around the store directory's contents.
+
+A major release focused on closing out the long-standing issue backlog: new
+commands for diagnosis, health-checking and CI gating; a richer event schema
+(outcomes, tags, provenance); persistent configuration; a redesigned HTML
+report; and a broad correctness pass across the hook, scan and install paths.
+
+### Added — new commands
+- `doctor` [`--check-store` / `--fix-store`] — validate hook registration, SKILL.md freshness and `events.jsonl` integrity; repairs corrupt/duplicate lines with an automatic backup
+- `status` — one-screen summary of install state, store location, config and last scan time
+- `init` — interactive setup wizard (hook scope, auto-prune, trigger capture, webhook)
+- `diagnose` — flags skills that look like they're auto-triggering without clear user intent, with concrete suggestions for tightening `description:`
+- `check` — CI/CD gate; exits non-zero when auto-trigger rate or invocation counts cross a threshold
+- `prune --older-than <duration>` — standalone alias of `clear --older-than`, with `--dry-run`
+- `tag <event-id>` — label events (`--add`/`--remove`), e.g. mark false positives
+- `replay [session-id]` — step through one session's invocations interactively
+- `completion <bash|zsh|fish>` — shell completion script generator
+- `install --check` — report install state without changing anything (for scripts/CI)
+
+### Added — event model & storage
+- Event schema v2: `recordedVia` (hook vs. scan), `tags`, `outcome`/`durationMs` (via the new `PostToolUse` hook), versioned with a `v` field; v1 events remain readable
+- Published JSON Schema for `events.jsonl` at `schemas/skill-invocation-event.schema.json`
+- `~/.cc-skill-trace/config.json` for persistent settings (aliases, auto-prune, redaction, webhook, update-check, follow interval, terminal width) and `state.json` for internal bookkeeping
+- `--store <dir>` / `CC_STORE_DIR` — run against an alternate event-store directory
+- Cross-source dedup (`selectNewEvents`) so `scan` never double-stores an invocation already captured live by the hook
+- `events.jsonl.bak` safety backup before `scan --clear`
+- Store integrity checking/repair (`checkStore`/`repairStore`) and streaming reads that no longer load the whole file into memory
+
+### Added — filtering & analysis
+- Shared filter flags across `show`/`stats`/`export`/`report`/`diagnose`/`check`: `--source`, `--cwd`, `--branch`, `--grep`, `--tag`
+- Human-friendly dates: `--since "yesterday"`, `"7 days ago"`, `"2 weeks ago"`, bare durations
+- `parseDuration` now accepts minutes (`30min`) alongside hours/days/weeks/months/years
+- `show --diff` — compare the current period against the previous one of equal length
+- `stats --cost [model]` — estimate injected-token cost from measured `injectedTokens`
+- `stats` streaks, hour-of-day histogram, and top working-directory breakdown
+- Programmatic `analyzeAutoTriggers()` / `diffPeriods()` exported for custom tooling
+
+### Added — output & UX
+- `show --page`/`--per-page` pagination beyond the fixed 12-row recent list
+- `show --group-by session`, `show --columns <list>` (compact-view column picker), `show -o <path>`
+- `list-skills --sort count|name|auto`, `list-skills --session <id>`
+- Skill display aliases via `config.json`
+- `CC_MAX_WIDTH` terminal width cap; `NO_COLOR`/`CC_NO_COLOR` compliance for pipes and CI
+- `show --follow` now guards against overlapping ticks, redraws on terminal resize, and always restores the cursor on exit
+- Confirmation prompts (skippable with `--force`) on `clear`, `uninstall`, and file-overwriting `export`
+
+### Added — HTML report
+- Skill × hour-of-day heatmap and per-git-branch bar chart
+- Light/dark/auto theme (`--theme`), filter/search state persisted in `localStorage`
+- `--redact` to mask trigger messages before they're embedded in the file
+- Keyboard-navigable, ARIA-labeled event cards; `@media print` styling for clean PDF export
+
+### Added — export
+- `export --format sql` — SQLite-compatible dump, pipeable into `sqlite3`
+- `export --merge <dirs...>` — combine multiple event stores, deduped
+- `export --no-bom` for POSIX tooling; CSV output is now RFC 4180-compliant (CRLF records, proper quoting)
+
+### Fixed
+- `cc-skill-trace install` failed to find the bundled `SKILL.md` when run from a real npm-installed package (path resolution assumed a layout that didn't match what `files` actually ships); the build now copies `SKILL.md` into `dist/` and install resolves it robustly with a fallback
+- `writeSettingsAtomic` created a fresh `~/.claude/` directory tree instead of crashing with `ENOENT` when it didn't exist yet
+- `uninstall` removed only cc-skill-trace's own hook entries, preserving any other tool's hooks in the same `settings.json`
+- `hook-capture` now has a bounded stdin read timeout and a configurable size limit (`CC_MAX_STDIN_KB`), and dedups an immediate duplicate hook firing for the same skill/session
+- `--version`/every command no longer crashes if the compiled `dist/` layout changes — version resolution walks up to find the correct `package.json` and falls back gracefully
+- `CC_PROJECTS_DIR` with a leading `~` is now expanded to the home directory
+- Non-Claude-Code `.jsonl` files under the scan directory are detected and skipped instead of being mis-parsed
+- `source` (user vs. Claude) now prefers Claude Code's own `user_invoked` flag when present, falling back to trigger-text inference only when it's absent
+- `vlen`/ANSI stripping now covers cursor-move, screen-clear and OSC (hyperlink/title) escape sequences, not just SGR color codes
+
+### Changed
+- `src/cli/index.ts` split into per-command modules under `src/cli/commands/`
+- `package.json`: `sideEffects: false`, `engines.npm`, a `./package.json` export subpath, `funding`, and broader npm keywords for discoverability
+- CI: cross-platform (macOS/Windows) job, coverage floor, `npm pack` content/size verification, `@arethetypeswrong/cli` export-map check, and a CLI startup benchmark; added OpenSSF Scorecard and Dependency Review workflows
+
+### Added (earlier, still unreleased at the time of writing)
 - `list-skills` command (alias: `ls`) — list all unique skills with auto/user counts; supports `--json`, `--since`, `--before`, `--scan`
 - `show --json` flag — output events as a JSON array for scripting/piping
 - `CC_DEBUG=1` environment variable — enable debug logging in `hook-capture` (written to stderr)
