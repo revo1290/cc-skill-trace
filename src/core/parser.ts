@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { estimateTokens } from "./analyze.js";
 import { expandTilde } from "./utils.js";
@@ -23,17 +23,23 @@ const DISALLOWED_PROJECTS_DIRS = ["/etc", "/sys", "/proc", "/dev"];
  * Resolve and validate a candidate CC_PROJECTS_DIR value: expands `~`,
  * normalizes to an absolute path, and rejects a handful of clearly
  * inappropriate system directories (#147).
+ *
+ * The disallowed-prefix check runs on the tilde-expanded string with
+ * separators normalized to `/`, *before* `path.resolve` — on Windows,
+ * `resolve("/etc")` yields a drive-relative `C:\etc`, which would never
+ * match a literal `"/etc"` comparison and silently skip the check.
  * @throws {Error} if the resolved path is one of the disallowed roots.
  */
 export function validateProjectsDir(raw: string): string {
-  const resolved = resolve(expandTilde(raw));
+  const expanded = expandTilde(raw);
+  const normalized = expanded.replace(/\\/g, "/");
   const isDisallowed = DISALLOWED_PROJECTS_DIRS.some(
-    (d) => resolved === d || resolved.startsWith(d + sep)
+    (d) => normalized === d || normalized.startsWith(`${d}/`)
   );
   if (isDisallowed) {
-    throw new Error(`CC_PROJECTS_DIR "${resolved}" is not allowed for security reasons`);
+    throw new Error(`CC_PROJECTS_DIR "${expanded}" is not allowed for security reasons`);
   }
-  return resolved;
+  return resolve(expanded);
 }
 
 // Read at call time so tests and CLI can override via CC_PROJECTS_DIR at runtime (#38)

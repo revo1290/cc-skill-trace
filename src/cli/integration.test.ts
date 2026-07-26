@@ -69,6 +69,17 @@ describe("CLI integration", () => {
     run(["install", "--check"]);
   });
 
+  it("re-running install does not duplicate the hook entry (#136)", async () => {
+    const out = run(["install"]);
+    assert.ok(out.includes("PreToolUse hook already registered"));
+    const settingsPath = join(home, ".claude", "settings.json");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    const preCount = settings.hooks.PreToolUse.filter((h) =>
+      JSON.stringify(h).includes("cc-skill-trace"),
+    ).length;
+    assert.equal(preCount, 1, "PreToolUse must contain exactly one cc-skill-trace entry");
+  });
+
   it("hook-capture appends a PreToolUse event and dedups an immediate repeat (#70)", () => {
     const payload = JSON.stringify({
       session_id: "live-sess", tool_name: "Skill",
