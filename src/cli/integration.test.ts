@@ -32,7 +32,10 @@ describe("CLI integration", () => {
     await mkdir(projects, { recursive: true });
     env = {
       ...process.env,
+      // node:os homedir() reads $HOME on POSIX but %USERPROFILE% on Windows —
+      // set both so the sandbox actually redirects ~/.claude on every platform.
       HOME: home,
+      USERPROFILE: home,
       CC_STORE_DIR: store,
       CC_PROJECTS_DIR: join(root, "projects"),
       NO_COLOR: "1",
