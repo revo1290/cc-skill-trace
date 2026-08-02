@@ -4,7 +4,13 @@ import { codexProvider } from "./codex.js";
 import { copilotProvider } from "./copilot.js";
 import type { Provider } from "./types.js";
 
-export type { Provider, SkillDef, ProviderConfidence, ProviderHookInfo, ProviderSessionFile } from "./types.js";
+export type {
+  Provider,
+  SkillDef,
+  ProviderConfidence,
+  ProviderHookInfo,
+  ProviderSessionFile,
+} from "./types.js";
 
 /** All known providers, keyed by {@link ProviderId}, in default display order. */
 export const PROVIDERS: Record<ProviderId, Provider> = {

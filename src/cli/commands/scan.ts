@@ -134,7 +134,9 @@ async function runScanOnce(opts: {
   if (opts.resume) {
     const state = await loadState();
     modifiedAfterMs =
-      providerId === "claude-code" ? state.lastScanMtimeMs : state.lastScanMtimeMsByProvider?.[providerId];
+      providerId === "claude-code"
+        ? state.lastScanMtimeMs
+        : state.lastScanMtimeMsByProvider?.[providerId];
     vlog(
       `resume: only files modified after ${modifiedAfterMs ? new Date(modifiedAfterMs).toISOString() : "(never scanned)"}`
     );
@@ -254,7 +256,10 @@ export function registerScanCommand(program: Command): void {
     .option("--clear", "Clear existing events before scanning")
     .option("--dry-run", "Preview what would be imported without writing (#152)")
     .option("--resume", "Only process session files modified since the last scan (#165)")
-    .option("--watch", "Keep watching session logs and import new events live (#128, claude-code only)")
+    .option(
+      "--watch",
+      "Keep watching session logs and import new events live (#128, claude-code only)"
+    )
     .option("--no-capture", "Do not record trigger messages (privacy, #74)")
     .option(
       "--provider <id>",

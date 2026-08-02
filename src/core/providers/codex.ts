@@ -173,7 +173,7 @@ function callReferencesSkill(rawArgs: string | undefined, skill: SkillDef): bool
 async function extractInvocationsFromFile(
   filePath: string,
   skills: SkillDef[],
-  opts: ExtractAllOptions,
+  opts: ExtractAllOptions
 ): Promise<SkillInvocationEvent[]> {
   if (skills.length === 0) return [];
   const maxLen = opts.triggerMaxLen ?? 300;
@@ -219,7 +219,9 @@ async function extractInvocationsFromFile(
 
     // Codex has no structured "user vs auto" flag — infer from an explicit
     // `$SkillName` mention, the documented explicit-invocation syntax.
-    const explicitRe = new RegExp(`\\$${matchedSkill.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+    const explicitRe = new RegExp(
+      `\\$${matchedSkill.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`
+    );
     const source: InvocationSource = explicitRe.test(triggerMessage ?? "") ? "user" : "claude";
 
     // Estimate injected tokens from the matching function_call_output, if present nearby.
@@ -230,7 +232,10 @@ async function extractInvocationsFromFile(
         const next = entries[j]!;
         if (next.type !== "response_item") continue;
         const np = next.payload;
-        if ((np?.type === "function_call_output" || np?.type === "custom_tool_call_output") && np.call_id === callId) {
+        if (
+          (np?.type === "function_call_output" || np?.type === "custom_tool_call_output") &&
+          np.call_id === callId
+        ) {
           if (typeof np.output === "string") injectedTokens = estimateTokens(np.output);
           break;
         }

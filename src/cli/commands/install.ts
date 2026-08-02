@@ -237,7 +237,7 @@ async function runInstall(opts: {
     if (provider === "codex") {
       console.log(
         chalk.gray(
-          '  Codex also requires [features].codex_hooks = true in ~/.codex/config.toml — cc-skill-trace does not edit that file for you.'
+          "  Codex also requires [features].codex_hooks = true in ~/.codex/config.toml — cc-skill-trace does not edit that file for you."
         )
       );
     }
@@ -256,7 +256,9 @@ async function runInstall(opts: {
   }
   if (changed) {
     await writeSettingsAtomic(settingsPath, settings);
-    console.log(chalk.gray(`  Restart ${getProvider(provider).displayName} for the hooks to take effect.`));
+    console.log(
+      chalk.gray(`  Restart ${getProvider(provider).displayName} for the hooks to take effect.`)
+    );
   }
 
   if (provider !== "claude-code") return; // no SKILL.md/dashboard-skill concept to sync for other providers
@@ -294,7 +296,11 @@ async function runInstall(opts: {
 
 // ─── uninstall ────────────────────────────────────────────────────────────────
 
-async function runUninstall(opts: { project?: boolean; force?: boolean; provider?: ProviderId }): Promise<void> {
+async function runUninstall(opts: {
+  project?: boolean;
+  force?: boolean;
+  provider?: ProviderId;
+}): Promise<void> {
   const provider = opts.provider ?? "claude-code";
   const settingsPath = settingsPathFor(Boolean(opts.project), provider);
   const { settings, missing, corrupt } = await readSettingsSafe(settingsPath);
@@ -330,7 +336,9 @@ async function runUninstall(opts: { project?: boolean; force?: boolean; provider
     }
   }
 
-  console.log(chalk.gray(`  Restart ${getProvider(provider).displayName} for the change to take effect.`));
+  console.log(
+    chalk.gray(`  Restart ${getProvider(provider).displayName} for the change to take effect.`)
+  );
   console.log(
     chalk.gray(
       `  Your captured events remain in ${getStoreDir()} — remove with: cc-skill-trace clear --force`

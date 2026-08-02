@@ -63,7 +63,7 @@ export interface Provider {
   extractInvocationsFromFile?(
     filePath: string,
     skills: SkillDef[],
-    opts: ExtractAllOptions,
+    opts: ExtractAllOptions
   ): Promise<SkillInvocationEvent[]>;
 
   /** Where this provider's hook/settings configuration lives, for a given scope. */

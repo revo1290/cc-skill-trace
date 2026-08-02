@@ -291,7 +291,11 @@ async function handlePost(
 ): Promise<void> {
   const now = Date.now();
 
-  const candidates = await readEvents({ sessionId: parsed.sessionId, skill: parsed.skillName, provider });
+  const candidates = await readEvents({
+    sessionId: parsed.sessionId,
+    skill: parsed.skillName,
+    provider,
+  });
   const open = [...candidates]
     .reverse()
     .find((ev) => ev.outcome == null && now - Date.parse(ev.timestamp) < 10 * 60 * 1000);

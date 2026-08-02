@@ -54,10 +54,13 @@ export const claudeCodeProvider: Provider = {
   supportsScan: true,
   listInstalledSkills,
   listSessionFiles: (sessionId) => listSessionFiles(sessionId),
-  extractInvocationsFromFile: (filePath, _skills, opts) => extractInvocationsFromFile(filePath, opts),
+  extractInvocationsFromFile: (filePath, _skills, opts) =>
+    extractInvocationsFromFile(filePath, opts),
   hookInfo(project) {
     return {
-      settingsPath: project ? resolve(".claude/settings.json") : join(homedir(), ".claude", "settings.json"),
+      settingsPath: project
+        ? resolve(".claude/settings.json")
+        : join(homedir(), ".claude", "settings.json"),
       format: "json",
     };
   },

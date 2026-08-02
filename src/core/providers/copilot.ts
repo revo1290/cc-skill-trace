@@ -74,7 +74,9 @@ export const copilotProvider: Provider = {
   listInstalledSkills,
   hookInfo(project) {
     return {
-      settingsPath: project ? resolve(".github", "copilot", "settings.json") : join(copilotHome(), "settings.json"),
+      settingsPath: project
+        ? resolve(".github", "copilot", "settings.json")
+        : join(copilotHome(), "settings.json"),
       format: "json",
     };
   },

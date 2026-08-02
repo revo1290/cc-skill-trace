@@ -13,7 +13,11 @@ export async function extractAllInvocationsForProvider(
   provider: Provider,
   opts: ExtractAllOptions = {}
 ): Promise<SkillInvocationEvent[]> {
-  if (!provider.supportsScan || !provider.listSessionFiles || !provider.extractInvocationsFromFile) {
+  if (
+    !provider.supportsScan ||
+    !provider.listSessionFiles ||
+    !provider.extractInvocationsFromFile
+  ) {
     throw new Error(`${provider.displayName} does not support scanning session logs.`);
   }
   const skills = await provider.listInstalledSkills();

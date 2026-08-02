@@ -7,7 +7,9 @@
  * to keep the dependency count at zero — the frontmatter here is always flat
  * key/value pairs, never nested structures, so this is sufficient.
  */
-export function parseSkillFrontmatter(content: string): { name: string; description?: string } | null {
+export function parseSkillFrontmatter(
+  content: string
+): { name: string; description?: string } | null {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
   if (!match) return null;
   const frontmatter = match[1]!;
