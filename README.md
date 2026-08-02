@@ -1,8 +1,8 @@
 # cc-skill-trace
 
-**Skill invocation debugger & visualizer for Claude Code**
+**Skill invocation debugger & visualizer for Claude Code, Codex CLI and GitHub Copilot CLI**
 
-See which Claude Code skills fired, when, and why — in your terminal or in an interactive browser dashboard.
+See which agent-CLI skills fired, when, and why — in your terminal or in an interactive browser dashboard. Claude Code support is stable; Codex CLI and GitHub Copilot CLI are best-effort (see [Multi-provider support](#multi-provider-support)).
 
 [![CI](https://github.com/revo1290/cc-skill-trace/actions/workflows/ci.yml/badge.svg)](https://github.com/revo1290/cc-skill-trace/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/revo1290/cc-skill-trace/badge)](https://securityscorecards.dev/viewer/?uri=github.com/revo1290/cc-skill-trace)
@@ -104,6 +104,34 @@ Uninstalling removes only cc-skill-trace's own hook entries — any other tool's
 ### Use inside Claude Code (as a plugin)
 
 Type `/skill-trace` in the Claude Code chat to open the dashboard and have Claude explain why each skill was auto-triggered.
+
+---
+
+## Multi-provider support
+
+cc-skill-trace can capture skill invocations from three agent CLIs. Every command that touches events accepts `--provider <id>` (default `claude-code`); omitting it never changes existing Claude Code behavior.
+
+| Provider | id | Confidence | Real-time (`hook-capture`) | Retroactive (`scan`) |
+|---|---|---|---|---|
+| Claude Code | `claude-code` | **stable** — documented `Skill` tool, PreToolUse/PostToolUse hooks | ✅ | ✅ |
+| OpenAI Codex CLI | `codex` | **best-effort** — no dedicated skill tool call; detected by matching tool-call arguments against installed `SKILL.md` paths (verified against real session logs) | ✅ (unverified live) | ✅ |
+| GitHub Copilot CLI | `copilot` | **best-effort** — built from public hook docs only, no local install was available to verify against | ✅ (unverified live) | ❌ (no documented session-log format) |
+
+```bash
+# Codex CLI
+cc-skill-trace install --provider codex
+# also requires [features].codex_hooks = true in ~/.codex/config.toml (not auto-edited)
+cc-skill-trace scan --provider codex
+
+# GitHub Copilot CLI (hook-capture only — no retroactive scan)
+cc-skill-trace install --provider copilot
+
+# Any command that filters events accepts --provider too
+cc-skill-trace show --provider codex
+cc-skill-trace list-skills --installed --provider copilot   # skills found on disk, not invocation counts
+```
+
+"Best-effort" means the payload/detection logic is built from documentation and (for Codex's scan path) real captured data, but has not been exercised against a live hook firing — if events don't show up after using a skill, run `cc-skill-trace doctor` and check `CC_DEBUG=1` output, then please [file an issue](https://github.com/revo1290/cc-skill-trace/issues) with what you see.
 
 ---
 
@@ -295,6 +323,8 @@ All fields are optional; environment variables (below) override the equivalent c
 | Variable | Default | Description |
 |---|---|---|
 | `CC_PROJECTS_DIR` | `~/.claude/projects` | Override the scan directory for session logs (`~` is expanded) |
+| `CC_CODEX_HOME` | `~/.codex` | Override the Codex CLI home directory used for `--provider codex` |
+| `CC_COPILOT_HOME` | `~/.copilot` | Override the Copilot CLI home directory used for `--provider copilot` |
 | `CC_STORE_DIR` | `~/.cc-skill-trace` | Override the event-store directory (same as `--store`) |
 | `CC_DEBUG` | _(unset)_ | Set to `1` to enable debug logging (also enabled by `--verbose`) |
 | `CC_SCAN_CONCURRENCY` | `8` | Number of session files to read in parallel during scan |

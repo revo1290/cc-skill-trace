@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**cc-skill-trace** — Claude Code の Skill 発動デバッガー＆ビジュアライザー。  
-どのスキルがいつ・なぜ自動発動されたかを追跡し、ブラウザレポートで可視化する OSS ツール。
+**cc-skill-trace** — Claude Code / Codex CLI / GitHub Copilot CLI の Skill 発動デバッガー＆ビジュアライザー。  
+どのスキルがいつ・なぜ自動発動されたかを追跡し、ブラウザレポートで可視化する OSS ツール。Claude Code 対応は stable、Codex CLI / GitHub Copilot CLI 対応は best-effort（`src/core/providers/types.ts` の `ProviderConfidence` 参照、#v3-multi-provider）。
 
 ## Commands
 
@@ -33,7 +33,15 @@ src/
 │   ├── filter.ts       # EventFilter（--since/--skill/--grep 等）と日付・duration パーサ
 │   ├── analyze.ts     # 自動発動診断・期間差分・コスト推定・ストリーク等の分析ロジック
 │   ├── config.ts      # ~/.cc-skill-trace/{config.json,state.json} の読み書き、getStoreDir()
-│   └── utils.ts       # expandTilde 等の小さな汎用ヘルパー
+│   ├── utils.ts       # expandTilde 等の小さな汎用ヘルパー
+│   └── providers/     # マルチエージェントCLI対応（#v3-multi-provider）
+│       ├── types.ts        # Provider インターフェース、SkillDef、ProviderConfidence
+│       ├── index.ts         # PROVIDERS レジストリ、getProvider()/resolveProviderId()
+│       ├── skill-md.ts       # SKILL.md frontmatter パーサ（3プロバイダ共通、依存ゼロ）
+│       ├── claude-code.ts     # parser.ts のラッパー（confidence: stable）
+│       ├── codex.ts            # ~/.codex/sessions/**/*.jsonl 解析 + hooks.json 書き込み（best-effort）
+│       ├── copilot.ts           # hook-capture のみ対応、scan 非対応（best-effort）
+│       └── scan.ts               # claude-code 以外向けの汎用 extractAllInvocationsForProvider
 ├── skill/
 │   └── SKILL.md       # Claude Code Skill 定義。/skill-trace スラッシュコマンドになる
 └── cli/
@@ -77,7 +85,7 @@ src/
 - `show` はデフォルトコマンド。`cc-skill-trace` だけで dashboard が出る
 - ターミナル出力は box-drawing 文字 + ANSI カラーで視認性を最大化（`format.ts:renderDashboard`）。`NO_COLOR`/非TTY では自動的に無効化
 - HTML レポートは依存ゼロのスタンドアロンファイル（Chart.js は CDN、ヒートマップ/ブランチ別グラフは自前CSS）
-- イベントストアは JSONL。`v` フィールドでスキーマバージョン管理（v1 は暗黙、v2 で `recordedVia`/`tags`/`outcome`/`durationMs` 追加）
+- イベントストアは JSONL。`v` フィールドでスキーマバージョン管理（v1 は暗黙、v2 で `recordedVia`/`tags`/`outcome`/`durationMs` 追加、v3 で `provider` 追加。`provider` 欠落は常に `"claude-code"` として扱う）
 - `readEvents` はストリーミング読み取り＋行単位フィルタ。ファイル全体をメモリに載せない
 - 設定は `~/.cc-skill-trace/config.json`（ユーザー編集用）と `state.json`（内部状態、last scan 等）に分離
 - `CC_STORE_DIR` / `--store` でイベントストアの場所を切り替え可能
@@ -86,6 +94,14 @@ src/
 - `CC_PROJECTS_DIR` 環境変数でスキャン対象ディレクトリを変更（先頭の `~/` はホームディレクトリに展開される。`/etc`,`/sys`,`/proc`,`/dev` 配下は `validateProjectsDir` が拒否する、#147）
 - SKILL.md は `dist/skill/SKILL.md`（ビルド時に `scripts/copy-skill.mjs` がコピー）を優先し、`src/skill/SKILL.md`（`files` で同梱）にフォールバック
 - `install`/`uninstall` は settings.json の hook を `hooks[].command` フィールドの完全一致で判定（`isCcSkillTraceHook`）。他ツールのフックを誤って触らない
+- `CC_CODEX_HOME` / `CC_COPILOT_HOME` 環境変数でそれぞれ `~/.codex` / `~/.copilot` を上書き可能（`CC_PROJECTS_DIR` と同じパターン）。`providers/codex.ts`/`copilot.ts` はこれをモジュールロード時ではなく**呼び出し時**に読む関数（`codexHome()`/`copilotHome()`）にしている — トップレベル定数にすると `process.env` を書き換えるテストでサンドボックス化できなくなるため
+
+### マルチプロバイダの発動検出方式 (#v3-multi-provider)
+
+- **Claude Code**: `Skill` という専用 tool_use があるため確実に判定できる（stable）
+- **Codex CLI**: 専用の skill tool 呼び出しは存在しない。実セッションログを調査した結果、モデルは skill 一覧で提示された `SKILL.md` の絶対パスを通常の shell 実行（`exec_command`）で読むことでスキルを"使う"ことが判明した（例: `sed -n '1,220p' /path/to/SKILL.md`）。そのため `function_call`/`custom_tool_call` の引数文字列に、インストール済みスキルの `SKILL.md` パスが部分文字列として含まれるかで判定している（best-effort だが scan 経路は実データで検証済み）
+- **GitHub Copilot CLI**: ローカルに実行環境がなくドキュメントのみを根拠にしている。hook payload は camelCase（`sessionId`/`toolName`/`toolArgs`/`toolResult`）で、`toolArgs` を JSON.stringify した文字列に対して同じパス部分一致判定を使う。セッションログ形式が非公開のため `scan` 非対応、`hook-capture` のみ
+- 上記の検出ロジックは `src/core/providers/{codex,copilot}.ts`（scan/list-skills 用）と `src/cli/commands/capture.ts`（hook-capture 用、`parseCodexPre`/`parseCopilotPre` 等）の両方に存在する。ペイロード形状は異なるが「インストール済みスキルの絶対パスを部分文字列マッチ」というロジック自体は共通
 
 ### 並行安全性の設計方針 (#161)
 

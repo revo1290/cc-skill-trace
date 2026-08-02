@@ -227,3 +227,113 @@ describe("hook-capture cross-process concurrency (#161)", () => {
     await rm(root, { recursive: true, force: true });
   });
 });
+
+describe("multi-provider install/hook-capture (#v3-multi-provider)", () => {
+  let home: string;
+  let store: string;
+  let env: NodeJS.ProcessEnv;
+
+  before(async () => {
+    const root = await mkdtemp(join(tmpdir(), "cc-skill-trace-provider-cli-test-"));
+    home = join(root, "home");
+    store = join(root, "store");
+    await mkdir(home, { recursive: true });
+    await mkdir(store, { recursive: true });
+    env = { ...process.env, HOME: home, USERPROFILE: home, CC_STORE_DIR: store, NO_COLOR: "1" };
+  });
+
+  after(async () => {
+    await rm(join(home, ".."), { recursive: true, force: true });
+  });
+
+  function run(args: string[], input?: string): string {
+    return execFileSync("node", ["--import", "tsx/esm", CLI_ENTRY, ...args], {
+      env, encoding: "utf-8", input: input ?? "", timeout: 15_000,
+    });
+  }
+
+  it("install --provider codex writes a wildcard-matcher hook to ~/.codex/hooks.json", async () => {
+    const out = run(["install", "--provider", "codex"]);
+    assert.ok(out.includes("best-effort"));
+    assert.ok(out.includes("PreToolUse hook installed"));
+    const hooksPath = join(home, ".codex", "hooks.json");
+    const settings = JSON.parse(await readFile(hooksPath, "utf-8"));
+    assert.equal(settings.hooks.PreToolUse[0].matcher, "*");
+    assert.ok(settings.hooks.PreToolUse[0].hooks[0].command.includes("--provider codex"));
+    // The claude-code settings file must be untouched by a codex install.
+    await assert.rejects(readFile(join(home, ".claude", "settings.json"), "utf-8"));
+  });
+
+  it("hook-capture --provider codex detects a skill invocation via a SKILL.md path match", async () => {
+    const skillDir = join(home, ".codex", "skills", "github");
+    await mkdir(skillDir, { recursive: true });
+    const skillPath = join(skillDir, "SKILL.md");
+    await writeFile(skillPath, "---\nname: github\ndescription: Work with GitHub\n---\n");
+
+    const payload = JSON.stringify({
+      session_id: "codex-sess-1",
+      cwd: "/repo",
+      tool_name: "Bash",
+      tool_input: { command: `sed -n '1,220p' ${skillPath}` },
+    });
+    const out = run(["hook-capture", "--provider", "codex"], payload);
+    assert.equal(out, "{}");
+
+    const raw = await readFile(join(store, "events.jsonl"), "utf-8");
+    const events = raw
+      .split("\n")
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l));
+    const ev = events.find((e) => e.sessionId === "codex-sess-1");
+    assert.ok(ev, "expected an event for codex-sess-1");
+    assert.equal(ev.skillName, "github");
+    assert.equal(ev.provider, "codex");
+    assert.equal(ev.recordedVia, "hook");
+    assert.equal(ev.source, "claude");
+  });
+
+  it("hook-capture --provider copilot parses the camelCase payload shape", async () => {
+    const skillDir = join(home, ".copilot", "skills", "pdf");
+    await mkdir(skillDir, { recursive: true });
+    const skillPath = join(skillDir, "SKILL.md");
+    await writeFile(skillPath, "---\nname: pdf\ndescription: Extract PDF text\n---\n");
+
+    const payload = JSON.stringify({
+      sessionId: "copilot-sess-1",
+      cwd: "/repo",
+      toolName: "shell",
+      toolArgs: { command: `cat ${skillPath}` },
+    });
+    const out = run(["hook-capture", "--provider", "copilot"], payload);
+    assert.equal(out, "{}");
+
+    const raw = await readFile(join(store, "events.jsonl"), "utf-8");
+    const events = raw
+      .split("\n")
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l));
+    const ev = events.find((e) => e.sessionId === "copilot-sess-1");
+    assert.ok(ev, "expected an event for copilot-sess-1");
+    assert.equal(ev.skillName, "pdf");
+    assert.equal(ev.provider, "copilot");
+  });
+
+  it("hook-capture --provider codex is a no-op when the tool call references no known skill", async () => {
+    const before = await readFile(join(store, "events.jsonl"), "utf-8");
+    const payload = JSON.stringify({
+      session_id: "codex-sess-unrelated",
+      tool_name: "Bash",
+      tool_input: { command: "ls -la" },
+    });
+    run(["hook-capture", "--provider", "codex"], payload);
+    const after = await readFile(join(store, "events.jsonl"), "utf-8");
+    assert.equal(before, after, "an unrelated tool call must not append an event");
+  });
+
+  it("uninstall --provider codex removes only the codex hook file's entry", async () => {
+    const out = run(["uninstall", "--provider", "codex", "--force"]);
+    assert.ok(out.includes("removed from"));
+    const settings = JSON.parse(await readFile(join(home, ".codex", "hooks.json"), "utf-8"));
+    assert.equal((settings.hooks.PreToolUse ?? []).length, 0);
+  });
+});

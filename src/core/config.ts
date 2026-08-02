@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { ProviderId } from "./types.js";
 
 /**
  * Persistent user configuration, stored at `~/.cc-skill-trace/config.json` (#131).
@@ -36,8 +37,15 @@ export interface TraceConfig {
  * Used for scan resume (#165), the update-check cache (#81) and auto-prune (#146).
  */
 export interface TraceState {
-  /** Epoch ms of the newest session-file mtime processed by the last scan (#165). */
+  /** Epoch ms of the newest session-file mtime processed by the last claude-code scan (#165). */
   lastScanMtimeMs?: number;
+  /**
+   * Same as `lastScanMtimeMs` but for non-claude-code providers, keyed by
+   * provider id — each provider's session files live in a different
+   * directory with an independent mtime range, so they can't share one
+   * cursor (#v3-multi-provider).
+   */
+  lastScanMtimeMsByProvider?: Partial<Record<ProviderId, number>>;
   /** Epoch ms of the last npm registry version check (#81). */
   lastUpdateCheckAt?: number;
   /** Latest version seen on the npm registry (#81). */

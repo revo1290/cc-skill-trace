@@ -65,10 +65,11 @@ export interface SessionLogEntry {
  * Current version of the on-disk event schema (#94).
  * - v1 (implicit, no `v` field): original schema up to cc-skill-trace 1.x
  * - v2: adds `v`, `recordedVia`, `tags`, `outcome`, `durationMs`
+ * - v3: adds `provider` (multi-agent-CLI support)
  *
  * Readers MUST accept events without a `v` field and treat them as v1.
  */
-export const EVENT_SCHEMA_VERSION = 2;
+export const EVENT_SCHEMA_VERSION = 3;
 
 export type InvocationSource = "user" | "claude" | "unknown";
 
@@ -78,6 +79,13 @@ export type RecordedVia = "hook" | "scan";
 /** Result of a skill invocation, when known via the PostToolUse hook (#144). */
 export type InvocationOutcome = "ok" | "error";
 
+/**
+ * Which agent CLI produced this event. Absent on events recorded before v3 —
+ * always treat a missing `provider` as `"claude-code"`, the original and
+ * still-default target.
+ */
+export type ProviderId = "claude-code" | "codex" | "copilot";
+
 /** Stored in ~/.cc-skill-trace/events.jsonl */
 export interface SkillInvocationEvent {
   /** Unique event ID */
@@ -86,13 +94,13 @@ export interface SkillInvocationEvent {
   v?: number;
   /** ISO timestamp when the skill was invoked */
   timestamp: string;
-  /** Claude Code session ID */
+  /** Session ID assigned by the originating agent CLI */
   sessionId: string;
   /** Name of the invoked skill */
   skillName: string;
   /** Arguments passed to the skill (if any) */
   skillArgs?: string;
-  /** Whether invoked by user (slash command) or by Claude automatically */
+  /** Whether invoked by the user (slash command) or by the agent automatically */
   source: InvocationSource;
   /** The user message text that immediately preceded this invocation */
   triggerMessage?: string;
@@ -110,6 +118,8 @@ export interface SkillInvocationEvent {
   outcome?: InvocationOutcome;
   /** Milliseconds between PreToolUse and PostToolUse hooks, when both fired (#144) */
   durationMs?: number;
+  /** Which agent CLI produced this event. Absent (legacy) means "claude-code". */
+  provider?: ProviderId;
 }
 
 // ─── Hook stdin payload (PreToolUse / PostToolUse) ──────────────────────────

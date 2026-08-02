@@ -6,9 +6,12 @@ import { createInterface } from "node:readline";
 import chalk from "chalk";
 import type { Command } from "commander";
 import { getStoreDir, loadConfig, loadState, saveConfig } from "../../core/config.js";
+import { ALL_PROVIDER_IDS, getProvider } from "../../core/providers/index.js";
 import { checkStore, readEvents, repairStore } from "../../core/store.js";
+import type { ProviderId } from "../../core/types.js";
 import { VERSION } from "../context.js";
 import { confirm, fail, isClaudeCodeRunning, vlog } from "../ui.js";
+import { parseProviderOpt } from "../options.js";
 import { writeSettingsAtomic } from "../atomic-write.js";
 import { CC_HOOK_COMMAND, isCcSkillTraceHook } from "../hooks.js";
 import { computeSkillMdStale, normalizeSkillMd, skillMdChanged } from "../skill-md.js";
@@ -16,8 +19,26 @@ import type { ReadResult } from "../skill-md.js";
 
 // ─── Settings / skill helpers (shared with other commands) ───────────────────
 
-export function settingsPathFor(project: boolean): string {
-  return project ? resolve(".claude/settings.json") : join(homedir(), ".claude", "settings.json");
+/** Where a given provider's hook settings file lives, for a given scope (#v3-multi-provider). */
+export function settingsPathFor(project: boolean, provider: ProviderId = "claude-code"): string {
+  return getProvider(provider).hookInfo(project).settingsPath;
+}
+
+/**
+ * The hook matcher and command suffix differ by provider: Claude Code has a
+ * dedicated `Skill` tool to match on; Codex/Copilot have no such tool, so we
+ * match every tool call (`"*"`) and let hook-capture itself decide whether
+ * the call touched a known SKILL.md (#v3-multi-provider).
+ */
+function hookSpecsFor(
+  provider: ProviderId
+): Array<{ event: "PreToolUse" | "PostToolUse"; command: string; matcher: string }> {
+  const matcher = provider === "claude-code" ? "Skill" : "*";
+  const suffix = provider === "claude-code" ? "" : ` --provider ${provider}`;
+  return [
+    { event: "PreToolUse", command: `${CC_HOOK_COMMAND}${suffix}`, matcher },
+    { event: "PostToolUse", command: `${CC_HOOK_COMMAND} --post${suffix}`, matcher },
+  ];
 }
 
 export const installedSkillMdPath = join(homedir(), ".claude", "skills", "skill-trace", "SKILL.md");
@@ -110,21 +131,16 @@ interface HookMatcherEntry {
   [key: string]: unknown;
 }
 
-const HOOK_SPECS = [
-  { event: "PreToolUse", command: CC_HOOK_COMMAND },
-  { event: "PostToolUse", command: `${CC_HOOK_COMMAND} --post` },
-] as const;
-
 function hookRegistered(settings: Settings, event: string): boolean {
   const hooks = (settings.hooks ?? {}) as Record<string, unknown>;
   const entries = (hooks[event] ?? []) as HookMatcherEntry[];
   return entries.some(isCcSkillTraceHook);
 }
 
-function addHook(settings: Settings, event: string, command: string): void {
+function addHook(settings: Settings, event: string, command: string, matcher: string): void {
   const hooks = (settings.hooks ?? {}) as Record<string, unknown>;
   const entries = [...((hooks[event] ?? []) as HookMatcherEntry[])];
-  entries.push({ matcher: "Skill", hooks: [{ type: "command", command }] });
+  entries.push({ matcher, hooks: [{ type: "command", command }] });
   settings.hooks = { ...hooks, [event]: entries };
 }
 
@@ -166,15 +182,18 @@ async function runInstall(opts: {
   project?: boolean;
   check?: boolean;
   skillTemplate?: string;
+  provider?: ProviderId;
 }): Promise<void> {
-  const settingsPath = settingsPathFor(Boolean(opts.project));
+  const provider = opts.provider ?? "claude-code";
+  const specs = hookSpecsFor(provider);
+  const settingsPath = settingsPathFor(Boolean(opts.project), provider);
   const { settings, corrupt } = await readSettingsSafe(settingsPath);
   if (corrupt) corruptSettingsError(settingsPath);
 
   // ── --check: report state, change nothing (#153) ─────────────────────────
   if (opts.check) {
     let ok = true;
-    for (const spec of HOOK_SPECS) {
+    for (const spec of specs) {
       const registered = hookRegistered(settings, spec.event);
       ok &&= registered;
       console.log(
@@ -183,23 +202,25 @@ async function runInstall(opts: {
           : chalk.red(`✗  ${spec.event} hook NOT registered`)
       );
     }
-    const stale = await isSkillMdStale();
-    const installed = await readFile(installedSkillMdPath, "utf-8").then(
-      () => true,
-      () => false
-    );
-    if (!installed) {
-      console.log(chalk.red("✗  SKILL.md not installed"));
-      ok = false;
-    } else if (stale) {
-      console.log(chalk.yellow("⚠  SKILL.md outdated — run: cc-skill-trace install"));
-      ok = false;
-    } else console.log(chalk.green("✓  SKILL.md up to date"));
+    if (provider === "claude-code") {
+      const stale = await isSkillMdStale();
+      const installed = await readFile(installedSkillMdPath, "utf-8").then(
+        () => true,
+        () => false
+      );
+      if (!installed) {
+        console.log(chalk.red("✗  SKILL.md not installed"));
+        ok = false;
+      } else if (stale) {
+        console.log(chalk.yellow("⚠  SKILL.md outdated — run: cc-skill-trace install"));
+        ok = false;
+      } else console.log(chalk.green("✓  SKILL.md up to date"));
+    }
     process.exit(ok ? 0 : 1);
   }
 
   // ── Warn when Claude Code is running: hooks load at startup (#71) ────────
-  if (isClaudeCodeRunning()) {
+  if (provider === "claude-code" && isClaudeCodeRunning()) {
     console.log(
       chalk.yellow(
         "⚠  Claude Code appears to be running — restart it after install for hooks to load."
@@ -207,21 +228,38 @@ async function runInstall(opts: {
     );
   }
 
+  if (provider !== "claude-code") {
+    console.log(
+      chalk.yellow(
+        `⚠  ${getProvider(provider).displayName} support is best-effort (#v3-multi-provider): the hook payload shape has not been verified against a live run. If events don't show up after using a skill, run "cc-skill-trace doctor" and check CC_DEBUG=1 output.`
+      )
+    );
+    if (provider === "codex") {
+      console.log(
+        chalk.gray(
+          '  Codex also requires [features].codex_hooks = true in ~/.codex/config.toml — cc-skill-trace does not edit that file for you.'
+        )
+      );
+    }
+  }
+
   // ── 1. Hook registration (Pre + Post, skip those already present) ───────
   let changed = false;
-  for (const spec of HOOK_SPECS) {
+  for (const spec of specs) {
     if (hookRegistered(settings, spec.event)) {
       console.log(chalk.gray(`  ${spec.event} hook already registered → ${settingsPath}`));
     } else {
-      addHook(settings, spec.event, spec.command);
+      addHook(settings, spec.event, spec.command, spec.matcher);
       changed = true;
       console.log(chalk.green(`✓  ${spec.event} hook installed → ${settingsPath}`));
     }
   }
   if (changed) {
     await writeSettingsAtomic(settingsPath, settings);
-    console.log(chalk.gray("  Restart Claude Code for the hooks to take effect."));
+    console.log(chalk.gray(`  Restart ${getProvider(provider).displayName} for the hooks to take effect.`));
   }
+
+  if (provider !== "claude-code") return; // no SKILL.md/dashboard-skill concept to sync for other providers
 
   // ── 2. SKILL.md — sync to the bundled (or custom, #162) template ─────────
   const skillDir = join(homedir(), ".claude", "skills", "skill-trace");
@@ -256,8 +294,9 @@ async function runInstall(opts: {
 
 // ─── uninstall ────────────────────────────────────────────────────────────────
 
-async function runUninstall(opts: { project?: boolean; force?: boolean }): Promise<void> {
-  const settingsPath = settingsPathFor(Boolean(opts.project));
+async function runUninstall(opts: { project?: boolean; force?: boolean; provider?: ProviderId }): Promise<void> {
+  const provider = opts.provider ?? "claude-code";
+  const settingsPath = settingsPathFor(Boolean(opts.project), provider);
   const { settings, missing, corrupt } = await readSettingsSafe(settingsPath);
   if (missing) {
     console.log(chalk.yellow(`⚠  Settings file not found: ${settingsPath}`));
@@ -280,16 +319,18 @@ async function runUninstall(opts: { project?: boolean; force?: boolean }): Promi
     );
   }
 
-  // Remove the installed skill file
-  const skillDir = join(homedir(), ".claude", "skills", "skill-trace");
-  try {
-    await rm(skillDir, { recursive: true, force: true });
-    console.log(chalk.green(`✓  Skill removed   → ${skillDir}`));
-  } catch {
-    console.log(chalk.yellow(`⚠  Could not remove skill directory: ${skillDir}`));
+  if (provider === "claude-code") {
+    // Remove the installed skill file
+    const skillDir = join(homedir(), ".claude", "skills", "skill-trace");
+    try {
+      await rm(skillDir, { recursive: true, force: true });
+      console.log(chalk.green(`✓  Skill removed   → ${skillDir}`));
+    } catch {
+      console.log(chalk.yellow(`⚠  Could not remove skill directory: ${skillDir}`));
+    }
   }
 
-  console.log(chalk.gray("  Restart Claude Code for the change to take effect."));
+  console.log(chalk.gray(`  Restart ${getProvider(provider).displayName} for the change to take effect.`));
   console.log(
     chalk.gray(
       `  Your captured events remain in ${getStoreDir()} — remove with: cc-skill-trace clear --force`
@@ -314,12 +355,23 @@ async function runStatus(): Promise<void> {
   console.log(
     `  events             ${chalk.white(String(events.length))}${events.length ? chalk.gray(`  (latest: ${events.at(-1)?.timestamp})`) : ""}`
   );
+  for (const id of ALL_PROVIDER_IDS) {
+    const count = events.filter((e) => (e.provider ?? "claude-code") === id).length;
+    if (count > 0) console.log(chalk.gray(`    ${id.padEnd(11)} ${count}`));
+  }
   console.log(
     `  hook (global)      pre: ${yn(hookRegistered(globalSettings.settings, "PreToolUse"))}  post: ${yn(hookRegistered(globalSettings.settings, "PostToolUse"))}`
   );
   console.log(
     `  hook (project)     pre: ${yn(hookRegistered(projectSettings.settings, "PreToolUse"))}  post: ${yn(hookRegistered(projectSettings.settings, "PostToolUse"))}`
   );
+  for (const id of ["codex", "copilot"] as const) {
+    const settingsPath = settingsPathFor(false, id);
+    const { settings } = await readSettingsSafe(settingsPath);
+    console.log(
+      `  hook (${id.padEnd(8)})   pre: ${yn(hookRegistered(settings, "PreToolUse"))}  post: ${yn(hookRegistered(settings, "PostToolUse"))} ${chalk.gray(`(best-effort, ${settingsPath})`)}`
+    );
+  }
   const skillInstalled = await readFile(installedSkillMdPath, "utf-8").then(
     () => true,
     () => false
@@ -389,6 +441,23 @@ async function runDoctor(opts: { checkStore?: boolean; fixStore?: boolean }): Pr
     if (!installed) warn("SKILL.md not installed — /skill-trace won't work inside Claude Code");
     else if (await isSkillMdStale()) bad("SKILL.md is outdated — run: cc-skill-trace install");
     else ok("SKILL.md up to date");
+
+    // Other providers (best-effort, #v3-multi-provider) — absence is normal
+    // unless the user explicitly ran `install --provider <id>`, so this never
+    // counts as a `bad()` problem, only an informational `ok`/nothing.
+    for (const id of ["codex", "copilot"] as const) {
+      const path = settingsPathFor(false, id);
+      const res = await readSettingsSafe(path);
+      if (res.corrupt) {
+        bad(`${id} hooks file is not valid JSON: ${path}`);
+        continue;
+      }
+      if (res.missing) continue; // not installed for this provider — fine
+      const pre = hookRegistered(res.settings, "PreToolUse");
+      const post = hookRegistered(res.settings, "PostToolUse");
+      if (pre && post) ok(`${id} hooks registered (best-effort — verify with actual use)`);
+      else if (pre) warn(`${id} PreToolUse hook registered but PostToolUse is not`);
+    }
 
     // config.json
     const dir = getStoreDir();
@@ -499,6 +568,11 @@ export function registerInstallCommands(program: Command): void {
       "--skill-template <path>",
       "Install a custom SKILL.md instead of the bundled one (#162)"
     )
+    .option(
+      "--provider <id>",
+      `Agent CLI to install hooks for: claude-code (default), codex, copilot (best-effort, #v3-multi-provider)`,
+      parseProviderOpt
+    )
     .action(runInstall);
 
   program
@@ -506,6 +580,11 @@ export function registerInstallCommands(program: Command): void {
     .description("Remove the capture hooks from Claude Code settings")
     .option("--project", "Uninstall from .claude/settings.json (project-level) instead of global")
     .option("-f, --force", "Skip the confirmation prompt (#68)")
+    .option(
+      "--provider <id>",
+      "Agent CLI to uninstall hooks from: claude-code (default), codex, copilot (#v3-multi-provider)",
+      parseProviderOpt
+    )
     .action(runUninstall);
 
   program
