@@ -119,6 +119,15 @@ describe("compileFilter + matchesFilter (#119)", () => {
     assert.throws(() => compileFilter({ grep: "(unclosed" }), /Invalid --grep pattern/);
   });
 
+  it("matches provider, treating a missing provider field as claude-code (#v3-multi-provider)", () => {
+    const legacy = makeEvent(); // no `provider` field, simulating a pre-v3 event
+    const codex = makeEvent({ provider: "codex" });
+    assert.ok(matchesFilter(legacy, compileFilter({ provider: "claude-code" })));
+    assert.ok(!matchesFilter(legacy, compileFilter({ provider: "codex" })));
+    assert.ok(matchesFilter(codex, compileFilter({ provider: "codex" })));
+    assert.ok(!matchesFilter(codex, compileFilter({ provider: "claude-code" })));
+  });
+
   it("applyFilter combines multiple criteria with AND semantics", () => {
     const events = [
       makeEvent({ id: "a", skillName: "pdf", source: "user" }),

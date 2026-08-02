@@ -1,4 +1,4 @@
-import type { InvocationSource, SkillInvocationEvent } from "./types.js";
+import type { InvocationSource, ProviderId, SkillInvocationEvent } from "./types.js";
 
 /**
  * Declarative event filter, shared by every CLI command and the public API (#119).
@@ -23,6 +23,8 @@ export interface EventFilter {
   grep?: string;
   /** Only events carrying this tag (#127). */
   tag?: string;
+  /** Which agent CLI produced the event (#v3-multi-provider). A missing `event.provider` counts as "claude-code". */
+  provider?: ProviderId;
 }
 
 /** An EventFilter with its regex pre-compiled, ready for per-event matching. */
@@ -56,6 +58,7 @@ export function matchesFilter(ev: SkillInvocationEvent, f: CompiledEventFilter):
   if (f.cwd && !(ev.cwd ?? "").startsWith(f.cwd)) return false;
   if (f.branch && ev.gitBranch !== f.branch) return false;
   if (f.tag && !(ev.tags ?? []).includes(f.tag)) return false;
+  if (f.provider && (ev.provider ?? "claude-code") !== f.provider) return false;
   if (f.grepRe) {
     const haystack = `${ev.skillName}\n${ev.skillArgs ?? ""}\n${ev.triggerMessage ?? ""}`;
     if (!f.grepRe.test(haystack)) return false;

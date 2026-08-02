@@ -1,7 +1,8 @@
 import type { Command } from "commander";
 import type { EventFilter } from "../core/filter.js";
 import { compileFilter, resolveDateInput } from "../core/filter.js";
-import type { InvocationSource } from "../core/types.js";
+import { ALL_PROVIDER_IDS } from "../core/providers/index.js";
+import type { InvocationSource, ProviderId } from "../core/types.js";
 import { fail } from "./ui.js";
 
 /** Commander option parser: human-friendly date → ISO string (#159). */
@@ -30,6 +31,13 @@ export function parseSourceOpt(value: string): InvocationSource {
   return fail(`Invalid --source: "${value}". Use "claude" (auto) or "user".`);
 }
 
+/** Commander option parser: provider id (#v3-multi-provider). */
+export function parseProviderOpt(value: string): ProviderId {
+  const v = value.toLowerCase();
+  if ((ALL_PROVIDER_IDS as string[]).includes(v)) return v as ProviderId;
+  return fail(`Invalid --provider: "${value}". Use one of: ${ALL_PROVIDER_IDS.join(", ")}`);
+}
+
 /** Fail fast if --since is later than --before. */
 export function validateDateRange(since: string | undefined, before: string | undefined): void {
   if (since && before && since > before) {
@@ -52,7 +60,12 @@ export function addFilterOptions(cmd: Command): Command {
     .option("--cwd <path>", "Filter by working directory prefix (#192)")
     .option("--branch <name>", "Filter by git branch (#99)")
     .option("--grep <regex>", "Regex filter on trigger message / args / skill name (#43)")
-    .option("--tag <tag>", "Filter by event tag (#127)");
+    .option("--tag <tag>", "Filter by event tag (#127)")
+    .option(
+      "--provider <id>",
+      "Filter by agent CLI: claude-code, codex or copilot (#v3-multi-provider)",
+      parseProviderOpt
+    );
 }
 
 /** Build an EventFilter from parsed commander options (validates ranges and regex). */
@@ -68,6 +81,7 @@ export function filterFromOpts(opts: Record<string, unknown>): EventFilter {
     branch: opts.branch as string | undefined,
     grep: opts.grep as string | undefined,
     tag: opts.tag as string | undefined,
+    provider: opts.provider as ProviderId | undefined,
   };
   try {
     compileFilter(filter); // validate the regex once, up front (#43)

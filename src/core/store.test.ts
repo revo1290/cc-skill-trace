@@ -324,7 +324,7 @@ describe("store", () => {
       const vDir = dir + "-schema";
       await appendEvent(makeEvent({ id: "v-test" }), vDir);
       const [ev] = await readEvents(vDir);
-      assert.equal(ev!.v, 2);
+      assert.equal(ev!.v, 3);
     });
   });
 

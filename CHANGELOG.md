@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.0.0]
+## [3.0.0] — 2026-08-02
+
+### Upgrading from 2.x
+
+No action required. `npm install -g cc-skill-trace@latest && cc-skill-trace install` keeps working exactly as before for Claude Code — the default provider and behavior are unchanged. Existing `events.jsonl` files (v1/v2, no `provider` field) continue to be read normally; a missing `provider` is always treated as `"claude-code"`. Multi-provider support is entirely opt-in via the new `--provider` flag.
+
+A major release: cc-skill-trace now tracks skill invocations across **Claude Code, OpenAI Codex CLI and GitHub Copilot CLI**, not just Claude Code.
+
+### Added — multi-provider support
+- New `Provider` abstraction (`src/core/providers/`) with a `confidence` level (`"stable"` or `"best-effort"`) surfaced everywhere, so it's always clear which providers' data to fully trust
+- **Codex CLI** (`codex`, best-effort): retroactive `scan` of `~/.codex/sessions/**/*.jsonl` rollout files, detected empirically — Codex has no dedicated "skill" tool call, so an invocation is recognized by matching a tool call's arguments against the absolute path of a known, installed `SKILL.md` (`~/.codex/skills/**`, `~/.codex/plugins/**/skills/**`, `.agents/skills/**`); real-time `hook-capture` support via `~/.codex/hooks.json`
+- **GitHub Copilot CLI** (`copilot`, best-effort): real-time `hook-capture` only (its documented camelCase hook payload — `sessionId`/`toolName`/`toolArgs`/`toolResult`) — no documented session-log format exists yet, so retroactive scanning isn't supported for this provider; skills discovered from `.github/skills/` and `~/.copilot/skills/`
+- `--provider <claude-code|codex|copilot>` flag on `install`, `uninstall`, `scan`, and every filter-based command (`show`, `stats`, `export`, `report`, `diagnose`, `check`)
+- `list-skills --installed --provider <id>` — list the skills actually installed on disk for a given provider (name, description, path), independent of any recorded invocations
+- `status` now reports a per-provider event breakdown and hook-registration state for all three providers; `doctor` checks Codex/Copilot hook files too (best-effort, informational — their absence is never a failure)
+- Event schema v3: new optional `provider` field on `SkillInvocationEvent`; per-provider scan-resume cursor (`state.json`'s `lastScanMtimeMsByProvider`) so resuming a Codex scan doesn't interact with the Claude Code cursor
+- `CC_CODEX_HOME` / `CC_COPILOT_HOME` env vars to override the default `~/.codex` / `~/.copilot` locations (mirrors `CC_PROJECTS_DIR`)
+
+### Known limitations
+- Codex and Copilot integrations are genuinely **best-effort**: their hook payload shapes are built from public docs, not verified against a live hook firing (the Codex session-log detection *is* empirically verified against real rollout files, but the real-time hook path is not). If events don't show up, run `cc-skill-trace doctor` with `CC_DEBUG=1` and file an issue with what you see.
+- Copilot has no retroactive `scan` — only events captured after `install --provider copilot` are recorded.
+- Neither provider currently reports whether an invocation was explicitly user-requested with full confidence; Codex infers it heuristically from a `$SkillName` mention in the triggering message, Copilot's hook payload carries no signal at all so every capture is recorded as auto-triggered.
+
+## [2.0.0] — 2026-07-26
 
 ### Upgrading from 1.x
 
@@ -206,7 +229,9 @@ report; and a broad correctness pass across the hook, scan and install paths.
 - CI workflow (Node 18, 20, 22 matrix)
 - Tag-based automated release to npm via GitHub Actions
 
-[Unreleased]: https://github.com/revo1290/cc-skill-trace/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/revo1290/cc-skill-trace/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/revo1290/cc-skill-trace/compare/v2.0.0...v3.0.0
+[2.0.0]: https://github.com/revo1290/cc-skill-trace/compare/v0.1.5...v2.0.0
 [0.1.5]: https://github.com/revo1290/cc-skill-trace/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/revo1290/cc-skill-trace/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/revo1290/cc-skill-trace/compare/v0.1.2...v0.1.3

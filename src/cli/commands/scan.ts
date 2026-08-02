@@ -4,6 +4,8 @@ import type { Command } from "commander";
 import { getStoreDir, loadState, saveState } from "../../core/config.js";
 import { extractAllInvocations, listSessionFiles, newestMtimeMs } from "../../core/parser.js";
 import type { ExtractAllOptions } from "../../core/parser.js";
+import { getProvider } from "../../core/providers/index.js";
+import { extractAllInvocationsForProvider } from "../../core/providers/scan.js";
 import {
   appendEvent,
   backupEvents,
@@ -11,10 +13,10 @@ import {
   readEvents,
   selectNewEvents,
 } from "../../core/store.js";
-import type { SkillInvocationEvent } from "../../core/types.js";
+import type { ProviderId, SkillInvocationEvent } from "../../core/types.js";
 import { getConfig } from "../context.js";
 import { buildStats, renderDashboard } from "../format.js";
-import { parseDateOpt, validateDateRange } from "../options.js";
+import { parseDateOpt, parseProviderOpt, validateDateRange } from "../options.js";
 import { vlog } from "../ui.js";
 
 /** Render scan progress with percent, ETA and current file (#140). */
@@ -49,6 +51,8 @@ export interface ScanAndMergeOptions {
   dryRun?: boolean;
   /** Override config: omit trigger messages (#74). */
   noCapture?: boolean;
+  /** Which agent CLI to scan session logs for (default "claude-code", #v3-multi-provider). */
+  provider?: ProviderId;
 }
 
 /** Result of {@link scanAndMerge}. */
@@ -74,7 +78,11 @@ export async function scanAndMerge(opts: ScanAndMergeOptions = {}): Promise<Scan
     triggerMaxLen: config.triggerMessageMaxLen,
     captureTriggerMessages: opts.noCapture ? false : config.captureTriggerMessages,
   };
-  const events = await extractAllInvocations(extractOpts);
+  const providerId = opts.provider ?? "claude-code";
+  const events =
+    providerId === "claude-code"
+      ? await extractAllInvocations(extractOpts)
+      : await extractAllInvocationsForProvider(getProvider(providerId), extractOpts);
   // Dedup against everything already stored — including hook-captured events,
   // which carry a random UUID rather than the scan's tool_use id, so a plain
   // id match would re-import every one of them (#182).
@@ -104,8 +112,10 @@ async function runScanOnce(opts: {
   dryRun?: boolean;
   resume?: boolean;
   capture?: boolean;
+  provider?: ProviderId;
 }): Promise<void> {
   validateDateRange(opts.since, opts.before);
+  const providerId = opts.provider ?? "claude-code";
   if (opts.clear && !opts.dryRun) {
     // Back up before clearing so a mid-scan failure can't destroy history (#180).
     const { backupPath, rotatedTo } = await backupEvents();
@@ -123,7 +133,10 @@ async function runScanOnce(opts: {
   let modifiedAfterMs: number | undefined;
   if (opts.resume) {
     const state = await loadState();
-    modifiedAfterMs = state.lastScanMtimeMs;
+    modifiedAfterMs =
+      providerId === "claude-code"
+        ? state.lastScanMtimeMs
+        : state.lastScanMtimeMsByProvider?.[providerId];
     vlog(
       `resume: only files modified after ${modifiedAfterMs ? new Date(modifiedAfterMs).toISOString() : "(never scanned)"}`
     );
@@ -135,11 +148,24 @@ async function runScanOnce(opts: {
     modifiedAfterMs,
     dryRun: opts.dryRun,
     noCapture: opts.capture === false,
+    provider: providerId,
   });
 
   if (!opts.dryRun) {
-    const files = await listSessionFiles();
-    await saveState({ lastScanMtimeMs: newestMtimeMs(files) });
+    if (providerId === "claude-code") {
+      const files = await listSessionFiles();
+      await saveState({ lastScanMtimeMs: newestMtimeMs(files) });
+    } else {
+      const provider = getProvider(providerId);
+      const files = (await provider.listSessionFiles?.()) ?? [];
+      const state = await loadState();
+      await saveState({
+        lastScanMtimeMsByProvider: {
+          ...state.lastScanMtimeMsByProvider,
+          [providerId]: newestMtimeMs(files),
+        },
+      });
+    }
   }
 
   let filtered = events;
@@ -160,7 +186,9 @@ async function runScanOnce(opts: {
     console.log(chalk.yellow("  No invocations found."));
     console.log(
       chalk.gray(
-        "  Tip: set CC_PROJECTS_DIR if your Claude Code logs live outside ~/.claude/projects."
+        providerId === "claude-code"
+          ? "  Tip: set CC_PROJECTS_DIR if your Claude Code logs live outside ~/.claude/projects."
+          : `  Tip: cc-skill-trace only detects ${providerId} skills that are also installed on disk (used to cross-reference tool calls). Run "cc-skill-trace list-skills --provider ${providerId}" to check.`
       )
     );
     return;
@@ -220,7 +248,7 @@ async function runWatch(intervalMs: number): Promise<void> {
 export function registerScanCommand(program: Command): void {
   program
     .command("scan")
-    .description("Retroactively scan Claude Code session logs (backfill)")
+    .description("Retroactively scan agent CLI session logs (backfill)")
     .option("--since <date>", "Only sessions newer than this date", parseDateOpt)
     .option("--before <date>", "Filter up to this date", parseDateOpt)
     .option("--skill <name>", "Filter by skill name")
@@ -228,10 +256,31 @@ export function registerScanCommand(program: Command): void {
     .option("--clear", "Clear existing events before scanning")
     .option("--dry-run", "Preview what would be imported without writing (#152)")
     .option("--resume", "Only process session files modified since the last scan (#165)")
-    .option("--watch", "Keep watching session logs and import new events live (#128)")
+    .option(
+      "--watch",
+      "Keep watching session logs and import new events live (#128, claude-code only)"
+    )
     .option("--no-capture", "Do not record trigger messages (privacy, #74)")
+    .option(
+      "--provider <id>",
+      "Agent CLI to scan: claude-code (default), codex — copilot has no session logs to scan (#v3-multi-provider)",
+      parseProviderOpt
+    )
     .action(async (opts) => {
+      const providerId: ProviderId = opts.provider ?? "claude-code";
+      if (providerId !== "claude-code" && !getProvider(providerId).supportsScan) {
+        console.log(
+          chalk.red(
+            `✗  ${getProvider(providerId).displayName} does not support scanning session logs (no documented log format). Use hook-capture instead: cc-skill-trace install --provider ${providerId}`
+          )
+        );
+        process.exit(1);
+      }
       if (opts.watch) {
+        if (providerId !== "claude-code") {
+          console.log(chalk.red(`✗  --watch only supports claude-code for now.`));
+          process.exit(1);
+        }
         const interval = Math.max(
           1000,
           parseInt(process.env.CC_WATCH_INTERVAL_MS ?? "5000", 10) || 5000

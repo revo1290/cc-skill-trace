@@ -218,6 +218,7 @@ function sameInvocation(a: SkillInvocationEvent, b: SkillInvocationEvent): boole
   if (a.sessionId !== b.sessionId) return false;
   if (a.skillName !== b.skillName) return false;
   if ((a.skillArgs ?? "") !== (b.skillArgs ?? "")) return false;
+  if ((a.provider ?? "claude-code") !== (b.provider ?? "claude-code")) return false;
   const dt = Math.abs(Date.parse(a.timestamp) - Date.parse(b.timestamp));
   return Number.isFinite(dt) && dt <= DEDUP_WINDOW_MS;
 }

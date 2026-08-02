@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { analyzeAutoTriggers } from "../../core/analyze.js";
+import { getProvider } from "../../core/providers/index.js";
 import { readEvents } from "../../core/store.js";
 import {
   buildStats,
@@ -10,7 +11,13 @@ import {
   renderStats,
   sortStats,
 } from "../format.js";
-import { addFilterOptions, filterFromOpts, parseDateOpt, parseLimitOpt } from "../options.js";
+import {
+  addFilterOptions,
+  filterFromOpts,
+  parseDateOpt,
+  parseLimitOpt,
+  parseProviderOpt,
+} from "../options.js";
 import { fail } from "../ui.js";
 import { scanAndMerge } from "./scan.js";
 
@@ -54,11 +61,42 @@ export function registerStatsCommands(program: Command): void {
     .option("--sort <by>", "Sort by: count | name | auto (#103)", "count")
     .option("--scan", "Scan session logs first")
     .option("--json", "Output as JSON")
+    .option(
+      "--provider <id>",
+      "Filter by agent CLI: claude-code, codex or copilot (#v3-multi-provider)",
+      parseProviderOpt
+    )
+    .option(
+      "--installed",
+      "List skills installed on disk for --provider instead of invocation counts (#v3-multi-provider)"
+    )
     .action(async (opts) => {
       const sortBy = String(opts.sort).toLowerCase();
       if (!["count", "name", "auto"].includes(sortBy)) {
         fail(`Invalid --sort: "${opts.sort}". Use count, name or auto.`);
       }
+
+      if (opts.installed) {
+        const provider = getProvider(opts.provider ?? "claude-code");
+        const skills = await provider.listInstalledSkills();
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(skills, null, 2)}\n`);
+          return;
+        }
+        if (skills.length === 0) {
+          console.log(chalk.gray(`  No skills installed for ${provider.displayName}.`));
+          return;
+        }
+        const maxName = Math.max(...skills.map((s) => s.name.length));
+        for (const s of skills) {
+          console.log(
+            `  ${chalk.bold.yellow(s.name.padEnd(maxName))}  ${chalk.gray(s.description ?? "")}`
+          );
+          console.log(chalk.gray(`  ${" ".repeat(maxName)}  ${s.path}`));
+        }
+        return;
+      }
+
       if (opts.scan) {
         const { fresh } = await scanAndMerge({ since: opts.since, sessionId: opts.session });
         process.stderr.write(chalk.gray(`  Imported ${fresh.length} new invocations.\n\n`));
@@ -67,6 +105,7 @@ export function registerStatsCommands(program: Command): void {
         since: opts.since,
         before: opts.before,
         sessionId: opts.session,
+        provider: opts.provider,
       });
       const stats = sortStats(buildStats(events), sortBy as "count" | "name" | "auto");
 
