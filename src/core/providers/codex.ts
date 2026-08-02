@@ -165,9 +165,21 @@ function userMessageText(payload: RolloutEntry["payload"]): string | undefined {
     .join(" ");
 }
 
-/** Does this tool call's raw arguments reference the given skill's SKILL.md path? */
+/**
+ * Does this tool call's raw arguments reference the given skill's SKILL.md path?
+ *
+ * `function_call.arguments` is itself a JSON-encoded string (OpenAI's function-calling
+ * convention — confirmed against real Codex rollout files), so a path embedded in it is
+ * escaped one level deeper than the raw filesystem path. This is invisible on POSIX (`/`
+ * needs no JSON escaping) but on Windows a raw substring check against `skill.path` (which
+ * contains literal `\`) never matches the doubled `\\` inside the JSON-encoded arguments
+ * string. Falling back to the JSON-escaped form of the path fixes this.
+ */
 function callReferencesSkill(rawArgs: string | undefined, skill: SkillDef): boolean {
-  return typeof rawArgs === "string" && rawArgs.includes(skill.path);
+  if (typeof rawArgs !== "string") return false;
+  if (rawArgs.includes(skill.path)) return true;
+  const escapedPath = JSON.stringify(skill.path).slice(1, -1);
+  return escapedPath !== skill.path && rawArgs.includes(escapedPath);
 }
 
 async function extractInvocationsFromFile(

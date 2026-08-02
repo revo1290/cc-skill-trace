@@ -173,6 +173,38 @@ describe("codexProvider", () => {
       assert.equal(events[0]!.skillName, "github");
     });
 
+    it("matches a Windows-style backslash path even though `arguments` JSON-double-escapes it (regression, cross-platform)", async () => {
+      // `function_call.arguments` is itself a JSON-encoded string (OpenAI's function-calling
+      // convention, confirmed against real Codex rollout files) — a `\`-containing path
+      // embedded in it is therefore escaped one level deeper (`\\`) than the raw filesystem
+      // path. This only breaks on real Windows paths, so it's regression-tested here with a
+      // synthetic Windows-style SkillDef instead of relying on Windows CI to catch it.
+      const windowsSkill = { name: "pdf", description: "PDF tools", path: "C:\\Users\\alice\\.codex\\skills\\pdf\\SKILL.md" };
+      const file = join(home, "sess-win.jsonl");
+      await writeFile(
+        file,
+        jsonl([
+          { type: "session_meta", payload: { id: "sess-win" } },
+          {
+            type: "response_item",
+            timestamp: "2026-04-19T22:13:36.000Z",
+            payload: {
+              type: "function_call",
+              name: "exec_command",
+              call_id: "call_win",
+              // Simulates the real double-encoding: JSON.stringify of the inner {cmd: ...}
+              // object, itself embedded as a string value that jsonl() stringifies again.
+              arguments: JSON.stringify({ cmd: `type ${windowsSkill.path}` }),
+            },
+          },
+        ])
+      );
+
+      const events = await codexProvider.extractInvocationsFromFile!(file, [windowsSkill], {});
+      assert.equal(events.length, 1);
+      assert.equal(events[0]!.skillName, "pdf");
+    });
+
     it("ignores tool calls that don't reference any known skill path", async () => {
       const file = join(home, "sess4.jsonl");
       await writeFile(

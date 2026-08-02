@@ -121,13 +121,28 @@ function parseClaudeCodePost(payload: HookPayload): ParsedPost | undefined {
   };
 }
 
-/** Does this serialized tool call reference a known installed skill's SKILL.md path? */
+/**
+ * Does any string leaf of this already-parsed value contain `path` as a substring?
+ * Walks the value directly instead of re-serializing it with JSON.stringify — on Windows,
+ * re-stringifying would double-escape the `\` in a filesystem path, so a naive
+ * `JSON.stringify(value).includes(path)` silently never matches (#v3-multi-provider).
+ */
+export function valueContainsPath(value: unknown, path: string): boolean {
+  if (typeof value === "string") return value.includes(path);
+  if (Array.isArray(value)) return value.some((v) => valueContainsPath(v, path));
+  if (value && typeof value === "object") {
+    return Object.values(value).some((v) => valueContainsPath(v, path));
+  }
+  return false;
+}
+
+/** Does this already-parsed tool call value reference a known installed skill's SKILL.md path? */
 async function matchInstalledSkill(
   provider: "codex" | "copilot",
-  haystack: string
+  toolCallValue: unknown
 ): Promise<{ name: string } | undefined> {
   const skills = await getProvider(provider).listInstalledSkills();
-  return skills.find((s) => haystack.includes(s.path));
+  return skills.find((s) => valueContainsPath(toolCallValue, s.path));
 }
 
 // Codex hook payloads are documented as snake_case, modeled after Claude
@@ -144,8 +159,7 @@ interface CodexHookPayload {
 
 async function parseCodexPre(raw: Record<string, unknown>): Promise<ParsedPre | undefined> {
   const payload = raw as CodexHookPayload;
-  const haystack = JSON.stringify(payload.tool_input ?? {});
-  const matched = await matchInstalledSkill("codex", haystack);
+  const matched = await matchInstalledSkill("codex", payload.tool_input);
   if (!matched) return undefined;
   return {
     sessionId: payload.session_id ?? "unknown",
@@ -159,8 +173,7 @@ async function parseCodexPre(raw: Record<string, unknown>): Promise<ParsedPre | 
 
 async function parseCodexPost(raw: Record<string, unknown>): Promise<ParsedPost | undefined> {
   const payload = raw as CodexHookPayload;
-  const haystack = JSON.stringify(payload.tool_input ?? {});
-  const matched = await matchInstalledSkill("codex", haystack);
+  const matched = await matchInstalledSkill("codex", payload.tool_input);
   if (!matched) return undefined;
   return {
     sessionId: payload.session_id ?? "unknown",
@@ -182,8 +195,7 @@ interface CopilotHookPayload {
 
 async function parseCopilotPre(raw: Record<string, unknown>): Promise<ParsedPre | undefined> {
   const payload = raw as CopilotHookPayload;
-  const haystack = JSON.stringify(payload.toolArgs ?? {});
-  const matched = await matchInstalledSkill("copilot", haystack);
+  const matched = await matchInstalledSkill("copilot", payload.toolArgs);
   if (!matched) return undefined;
   return {
     sessionId: payload.sessionId ?? "unknown",
@@ -195,8 +207,7 @@ async function parseCopilotPre(raw: Record<string, unknown>): Promise<ParsedPre 
 
 async function parseCopilotPost(raw: Record<string, unknown>): Promise<ParsedPost | undefined> {
   const payload = raw as CopilotHookPayload;
-  const haystack = JSON.stringify(payload.toolArgs ?? {});
-  const matched = await matchInstalledSkill("copilot", haystack);
+  const matched = await matchInstalledSkill("copilot", payload.toolArgs);
   if (!matched) return undefined;
   return {
     sessionId: payload.sessionId ?? "unknown",
