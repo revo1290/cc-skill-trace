@@ -25,6 +25,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # `gh issue create`/`gh issue list` resolve the target repo from the
+      # local git remote, so this checkout is required even though the job
+      # doesn't otherwise need any repo files.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 20
