@@ -47,3 +47,39 @@ describe("SKILL.md install check", () => {
     );
   });
 });
+
+// #82: /skill-trace should pass user-provided arguments through to the CLI
+// instead of always running the fixed `-n 15` command.
+describe("SKILL.md argument passthrough (#82)", () => {
+  it("references the {{args}} placeholder", () => {
+    assert.match(
+      bashBlock,
+      /\{\{args\}\}/,
+      "expected the bash block to read Claude Code's {{args}} placeholder"
+    );
+  });
+
+  it("falls back to the default `-n 15` command when no args are given", () => {
+    assert.match(
+      bashBlock,
+      /cc-skill-trace show --scan --terse -n 15/,
+      "expected the empty-args branch to keep the previous default behavior"
+    );
+  });
+
+  it("passes non-empty args through to `cc-skill-trace show --scan --terse`", () => {
+    assert.match(
+      bashBlock,
+      /cc-skill-trace show --scan --terse \$ARGS/,
+      "expected user-supplied args to be forwarded to the show command"
+    );
+  });
+
+  it("keeps the not-installed check as an exit-0 no-op regardless of args (never blocks Claude Code)", () => {
+    assert.match(
+      bashBlock,
+      /NOT INSTALLED[^\n]*exit 0/,
+      "expected the not-installed branch to still exit 0"
+    );
+  });
+});

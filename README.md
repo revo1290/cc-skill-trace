@@ -103,7 +103,7 @@ Uninstalling removes only cc-skill-trace's own hook entries — any other tool's
 
 ### Use inside Claude Code (as a plugin)
 
-Type `/skill-trace` in the Claude Code chat to open the dashboard and have Claude explain why each skill was auto-triggered.
+Type `/skill-trace` in the Claude Code chat to open the dashboard and have Claude explain why each skill was auto-triggered. Arguments after `/skill-trace` are passed through to `cc-skill-trace show`, e.g. `/skill-trace --since 7d` or `/skill-trace --skill commit`; with no arguments it shows the most recent 15 events.
 
 ---
 
@@ -292,6 +292,14 @@ cc-skill-trace completion zsh >> ~/.zshrc   # shell completion: bash | zsh | fis
 ### 3. Claude Code skill (`/skill-trace`)
 
 Installing `~/.claude/skills/skill-trace/SKILL.md` lets you call `/skill-trace` from the Claude Code chat. Claude runs the dashboard and interprets the results — explaining why an auto-trigger rate is high, which skills fire unexpectedly, and how to narrow skill descriptions.
+
+Any arguments you type after `/skill-trace` are forwarded to `cc-skill-trace show --scan --terse` as-is (invalid flags are rejected by the CLI itself, not the skill). With no arguments it falls back to the previous default (`-n 15`):
+
+```
+/skill-trace                    # default: most recent 15 events
+/skill-trace --since 7d         # events from the last 7 days
+/skill-trace --skill commit     # only the "commit" skill
+```
 
 ---
 
