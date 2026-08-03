@@ -17,6 +17,7 @@ jobs:
   release:
     name: Publish to npm & create GitHub Release
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -28,6 +29,22 @@ jobs:
           node-version: 20
           registry-url: 'https://registry.npmjs.org'
           cache: npm
+
+      # Fail fast (and with a clear message) if NPM_TOKEN is missing, expired
+      # or lacks publish rights, instead of discovering it after the version
+      # bump/tag/GitHub Release have already been created. `npm publish` with
+      # a bad token reports a generic "404 Not Found" that's indistinguishable
+      # from "package doesn't exist" — this surfaced twice (v2.0.0, v3.0.0)
+      # and left the repo in an inconsistent state (tag + Release with no
+      # matching npm version) before the ordering fix below.
+      - name: Verify npm authentication before doing anything else
+        run: |
+          if ! npm whoami; then
+            echo "::error::npm authentication failed — NPM_TOKEN is missing, expired, or not an 'Automation' type token (regular tokens can be blocked by the account's 2FA-for-publish setting even though the value is otherwise valid). Generate a new Automation token at https://www.npmjs.com/settings/~/tokens and update the NPM_TOKEN repository secret."
+            exit 1
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # Requires repo secret: SSH_SIGNING_KEY (private key of id_ed25519_signing).
       # The corresponding public key must be registered under
@@ -48,6 +65,16 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+
+      # Publish to npm BEFORE any git state changes (version-bump PR, tag,
+      # GitHub Release). If this fails, nothing else in this workflow has
+      # touched the repo yet, so the run can simply be re-triggered once the
+      # underlying issue (e.g. NPM_TOKEN) is fixed — no manual cleanup of a
+      # dangling tag/Release that points at a version npm never received.
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Push version bump as release branch, open PR, and enable auto-merge
         run: |
@@ -79,8 +106,3 @@ jobs:
           tag_name: v${{ inputs.version }}
           generate_release_notes: true
           make_latest: true
-
-      - name: Publish to npm
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

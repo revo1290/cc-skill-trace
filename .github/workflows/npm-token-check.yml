@@ -1,0 +1,69 @@
+name: NPM Token Health Check
+
+# Proactively catches an expired/invalid NPM_TOKEN before the *next* Release
+# run needs it — v2.0.0 and v3.0.0 both discovered a bad token mid-release
+# (npm publish failing with a generic "404 Not Found" that looks identical to
+# "package doesn't exist"), each time after the version bump, git tag and
+# GitHub Release had already been created. This runs `npm whoami` on a
+# schedule and opens an issue the moment it starts failing, so there's
+# advance warning instead of a broken release.
+
+on:
+  schedule:
+    # Weekly, Monday 07:00 UTC — ahead of scorecard.yml's 06:00 Monday run
+    # so both don't contend for the same runner slot.
+    - cron: '0 7 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-token:
+    name: Verify NPM_TOKEN can authenticate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: npm whoami
+        id: check
+        run: |
+          if npm whoami; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Avoid filing a duplicate every week while the token stays broken.
+      - name: Open an issue if the token is invalid (and none is already open)
+        if: steps.check.outputs.ok != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list --search "NPM_TOKEN is invalid or expired in:title" --state open --json number --jq 'length')
+          if [ "$existing" -gt 0 ]; then
+            echo "An open issue already tracks this — skipping."
+            exit 0
+          fi
+
+          cat > /tmp/npm-token-issue-body.md <<'EOF'
+          The weekly NPM Token Health Check found that `npm whoami` failed using the `NPM_TOKEN` repository secret. The `Release` workflow's npm publish step will fail until this is fixed (it now fails fast on this same check, before touching any git state, so a bad token no longer leaves a dangling tag/Release — but releases still can't ship).
+
+          To fix:
+          1. Go to https://www.npmjs.com/settings/~/tokens
+          2. Generate a new **Automation** type token (not Publish/Read-only — Automation tokens can publish without an interactive 2FA prompt, which regular tokens on a 2FA-for-publish account cannot do from CI)
+          3. Update the `NPM_TOKEN` secret under this repo's Settings → Secrets and variables → Actions
+          4. Re-run this workflow manually (workflow_dispatch) to confirm it's fixed — this issue will not auto-close, close it once verified
+          EOF
+
+          gh issue create \
+            --title "NPM_TOKEN is invalid or expired — release automation will fail" \
+            --label "ci" \
+            --body-file /tmp/npm-token-issue-body.md

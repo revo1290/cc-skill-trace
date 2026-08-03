@@ -9,10 +9,17 @@ on:
 permissions:
   contents: read
 
+# Cancel a still-running CI run for the same branch/PR once a newer commit
+# lands, instead of letting superseded runs finish and consume runner time.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       matrix:
         node-version: [18, 20, 22]
@@ -39,6 +46,7 @@ jobs:
   cross-platform:
     name: Cross-platform (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -59,6 +67,7 @@ jobs:
   coverage:
     name: Test coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -99,6 +108,7 @@ jobs:
   pack-check:
     name: Package contents & size
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -134,6 +144,7 @@ jobs:
   attw:
     name: Are the Types Wrong?
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -149,6 +160,7 @@ jobs:
   benchmark:
     name: CLI startup benchmark
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
