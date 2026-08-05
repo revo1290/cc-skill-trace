@@ -246,7 +246,9 @@ export function registerShowCommand(program: Command): void {
 
       console.log(chalk.gray("  Enter/space: next · q: quit\n"));
       let i = 0;
-      printEvent(events[i]!, i);
+      const first = events[i];
+      if (!first) return;
+      printEvent(first, i);
       i++;
       if (i >= events.length) return;
 
@@ -259,7 +261,12 @@ export function registerShowCommand(program: Command): void {
             resolve();
             return;
           }
-          printEvent(events[i]!, i);
+          const ev = events[i];
+          if (!ev) {
+            resolve();
+            return;
+          }
+          printEvent(ev, i);
           i++;
           if (i >= events.length) resolve();
         });

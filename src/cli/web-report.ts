@@ -39,12 +39,11 @@ export function buildHtmlReport(
   // ── Aggregation ──────────────────────────────────────────────────────────
   const skillCounts: Record<string, { total: number; byUser: number; byClaude: number }> = {};
   for (const ev of sourceEvents) {
-    if (!skillCounts[ev.skillName]) {
-      skillCounts[ev.skillName] = { total: 0, byUser: 0, byClaude: 0 };
-    }
-    skillCounts[ev.skillName]!.total++;
-    if (ev.source === "user") skillCounts[ev.skillName]!.byUser++;
-    else skillCounts[ev.skillName]!.byClaude++;
+    const counts = skillCounts[ev.skillName] ?? { total: 0, byUser: 0, byClaude: 0 };
+    skillCounts[ev.skillName] = counts;
+    counts.total++;
+    if (ev.source === "user") counts.byUser++;
+    else counts.byClaude++;
   }
 
   const topSkills = Object.entries(skillCounts)

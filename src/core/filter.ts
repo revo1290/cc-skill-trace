@@ -92,6 +92,7 @@ export function parseDuration(value: string, now = new Date()): Date {
   if (!match) {
     throw new Error(`Invalid duration: "${value}". Expected e.g. 30min, 12h, 30d, 4w, 2mo, 1y`);
   }
+  // biome-ignore lint/style/noNonNullAssertion: group 1 (`\d+`) is mandatory in DURATION_RE, so it's always captured once `match` itself is non-null.
   const n = parseInt(match[1]!, 10);
   const unit = match[2]?.toLowerCase();
   const cutoff = new Date(now.getTime());
@@ -150,6 +151,7 @@ export function resolveDateInput(input: string, now = new Date()): string {
       month: "mo",
       year: "y",
     };
+    // biome-ignore lint/style/noNonNullAssertion: group 2 is a mandatory alternation covering exactly unitMap's keys, so it's always captured and always found.
     return parseDuration(`${ago[1]}${unitMap[ago[2]!]}`, now).toISOString();
   }
 

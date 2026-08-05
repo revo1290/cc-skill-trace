@@ -169,7 +169,10 @@ async function runScanOnce(opts: {
   }
 
   let filtered = events;
-  if (opts.before) filtered = filtered.filter((e) => e.timestamp <= opts.before!);
+  if (opts.before) {
+    const before = opts.before;
+    filtered = filtered.filter((e) => e.timestamp <= before);
+  }
   if (opts.skill) filtered = filtered.filter((e) => e.skillName === opts.skill);
 
   if (opts.dryRun) {

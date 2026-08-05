@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Node.js version gate — Intl.Segmenter requires Node 16+, fetch/structuredClone require 18+ (#39)
-const _nodeMajor = parseInt(process.versions.node.split(".")[0]!, 10);
+const _nodeMajor = parseInt(process.versions.node.split(".")[0] ?? "0", 10);
 if (_nodeMajor < 18) {
   process.stderr.write(
     `\ncc-skill-trace requires Node.js ≥ 18. You are running ${process.version}.\n` +

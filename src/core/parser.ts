@@ -68,6 +68,7 @@ export async function mapWithLimit<T, R>(
   async function worker() {
     while (next < items.length) {
       const i = next++;
+      // biome-ignore lint/style/noNonNullAssertion: i is the pre-increment value of next, checked < items.length above, so items[i] is in bounds.
       results[i] = await fn(items[i]!);
     }
   }
@@ -235,6 +236,7 @@ export async function extractInvocationsFromFile(
 
   // Scan through entries looking for assistant messages that contain a Skill tool_use
   for (let i = 0; i < entries.length; i++) {
+    // biome-ignore lint/style/noNonNullAssertion: i is bounded by entries.length above.
     const entry = entries[i]!;
     if (!entry.message) continue;
     const msg = entry.message;
@@ -249,6 +251,7 @@ export async function extractInvocationsFromFile(
     // Find the most recent user message before this entry
     let triggerMessage: string | undefined;
     for (let j = i - 1; j >= 0; j--) {
+      // biome-ignore lint/style/noNonNullAssertion: j starts at i - 1 (i < entries.length from the outer loop) and only decreases while j >= 0, so it stays in bounds.
       const prev = entries[j]!;
       if (!prev.message || prev.message.role !== "user") continue;
       const content = prev.message.content;
@@ -280,7 +283,9 @@ export async function extractInvocationsFromFile(
             ? entry.user_invoked
             : undefined;
 
-      const bareSkillName = skillName.includes(":") ? skillName.split(":").pop()! : skillName;
+      const bareSkillName = skillName.includes(":")
+        ? (skillName.split(":").pop() ?? skillName)
+        : skillName;
       const slashCmdRe = new RegExp(
         `^/(${escapeRegExp(skillName)}|${escapeRegExp(bareSkillName)})(\\s|$)`,
         "i"
@@ -292,6 +297,7 @@ export async function extractInvocationsFromFile(
       // The next user message should contain a tool_result block with matching tool_use_id.
       let injectedTokens: number | undefined;
       for (let j = i + 1; j < Math.min(i + 4, entries.length); j++) {
+        // biome-ignore lint/style/noNonNullAssertion: j < Math.min(i + 4, entries.length) guarantees j is in bounds.
         const next = entries[j]!;
         if (!next.message) continue;
         if (next.message.role !== "user") break;
@@ -361,7 +367,8 @@ export async function extractAllInvocations(
     fileInfos = await listSessionFiles();
   }
   if (opts.modifiedAfterMs != null) {
-    fileInfos = fileInfos.filter((f) => f.mtimeMs > opts.modifiedAfterMs!);
+    const modifiedAfterMs = opts.modifiedAfterMs;
+    fileInfos = fileInfos.filter((f) => f.mtimeMs > modifiedAfterMs);
   }
   let files = fileInfos.map((f) => f.path);
   if (opts.files) {

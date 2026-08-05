@@ -12,10 +12,12 @@ export function parseSkillFrontmatter(
 ): { name: string; description?: string } | null {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
   if (!match) return null;
+  // biome-ignore lint/style/noNonNullAssertion: group 1 is mandatory in the pattern above, so it's always captured once `match` itself is non-null.
   const frontmatter = match[1]!;
 
   const nameMatch = /^name:\s*(.+)$/m.exec(frontmatter);
   if (!nameMatch) return null;
+  // biome-ignore lint/style/noNonNullAssertion: group 1 (`.+`) is mandatory, so it's always captured once `nameMatch` itself is non-null.
   const name = nameMatch[1]!.trim().replace(/^["']|["']$/g, "");
 
   // description may be a single line or a YAML block scalar (`>` / `|`),
@@ -23,6 +25,7 @@ export function parseSkillFrontmatter(
   const descMatch = /^description:\s*(.*)$/m.exec(frontmatter);
   let description: string | undefined;
   if (descMatch) {
+    // biome-ignore lint/style/noNonNullAssertion: group 1 is mandatory (can match an empty string, but always participates), so it's always captured here.
     const first = descMatch[1]!.trim();
     if (first === ">" || first === "|" || first === ">-" || first === "|-") {
       const afterIdx = frontmatter.indexOf(descMatch[0]) + descMatch[0].length;

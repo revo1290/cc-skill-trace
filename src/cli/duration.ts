@@ -17,6 +17,7 @@ export function parseDuration(value: string): Date {
     );
     process.exit(1);
   }
+  // biome-ignore lint/style/noNonNullAssertion: group 1 (`\d+`) is mandatory in the pattern, so it's always captured once `match` itself is non-null.
   const n = parseInt(match[1]!, 10);
   const unit = match[2]?.toLowerCase();
   const cutoff = new Date();
