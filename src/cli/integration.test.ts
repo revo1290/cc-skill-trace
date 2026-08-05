@@ -124,6 +124,42 @@ describe("CLI integration", () => {
   it("scan is idempotent — re-scanning imports zero new events", () => {
     const out = run(["scan"]);
     assert.ok(out.includes("Imported 0 new invocations"));
+    assert.ok(out.includes("enriched 0 existing"));
+  });
+
+  it("scan enriches an existing hook-captured event with triggerMessage and an upgraded source instead of duplicating it (#223)", async () => {
+    // 1. Real-time hook capture: no triggerMessage available (never delivered
+    //    with PreToolUse), and source defaults to "claude" since nothing in
+    //    the payload indicates an explicit invocation.
+    const out1 = run(["hook-capture"], JSON.stringify({
+      session_id: "enrich-sess", tool_name: "Skill",
+      tool_input: { skill: "release" }, user_invoked: false,
+    }));
+    assert.equal(out1, "{}");
+    // Captured right after the hook-capture process returns so it lands well
+    // inside the (5s) hook/scan dedup window around the hook's own timestamp.
+    const preTs = new Date().toISOString();
+
+    // 2. scan reads the full session log for the SAME invocation: it has the
+    //    preceding user message (triggerMessage) and an explicit user_invoked
+    //    flag (stronger source evidence). The assistant message timestamp is
+    //    close to "now" so it falls inside the hook/scan dedup window and is
+    //    recognised as the same invocation rather than a new one.
+    await writeFile(join(projects, "enrich-sess.jsonl"), jsonl([
+      { type: "message", timestamp: preTs, sessionId: "enrich-sess", message: { role: "user", content: "/release please" } },
+      { type: "message", timestamp: preTs, sessionId: "enrich-sess", message: { role: "assistant", content: [{ type: "tool_use", id: "tu-enrich", name: "Skill", input: { skill: "release" }, user_invoked: true }] } },
+    ]));
+
+    const out2 = run(["scan"]);
+    assert.ok(out2.includes("Imported 0 new invocations"), "the matched candidate must not be stored as a second row");
+    assert.ok(out2.includes("enriched 1 existing"));
+
+    const events = JSON.parse(run(["show", "--json", "--session", "enrich-sess"]));
+    assert.equal(events.length, 1, "still exactly one event for this invocation, not a duplicate");
+    const [ev] = events;
+    assert.equal(ev.recordedVia, "hook", "the original hook-captured row is kept, patched in place");
+    assert.equal(ev.triggerMessage, "/release please");
+    assert.equal(ev.source, "user");
   });
 
   it("stats renders daily activity for the combined event set", () => {

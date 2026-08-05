@@ -10,9 +10,12 @@ import {
   appendEvent,
   backupEvents,
   clearEvents,
+  enrichExistingEvents,
   readEvents,
   selectNewEvents,
+  updateEvent,
 } from "../../core/store.js";
+import type { EventEnrichment } from "../../core/store.js";
 import type { ProviderId, SkillInvocationEvent } from "../../core/types.js";
 import { getConfig } from "../context.js";
 import { buildStats, renderDashboard } from "../format.js";
@@ -61,6 +64,8 @@ export interface ScanResult {
   events: SkillInvocationEvent[];
   /** Events that were not already in the store. */
   fresh: SkillInvocationEvent[];
+  /** Existing stored events that were backfilled with richer scan data (#223). */
+  enriched: EventEnrichment[];
 }
 
 /**
@@ -83,14 +88,20 @@ export async function scanAndMerge(opts: ScanAndMergeOptions = {}): Promise<Scan
     providerId === "claude-code"
       ? await extractAllInvocations(extractOpts)
       : await extractAllInvocationsForProvider(getProvider(providerId), extractOpts);
+  const stored = await readEvents({});
   // Dedup against everything already stored — including hook-captured events,
   // which carry a random UUID rather than the scan's tool_use id, so a plain
   // id match would re-import every one of them (#182).
-  const fresh = selectNewEvents(await readEvents({}), events);
+  const fresh = selectNewEvents(stored, events);
+  // Candidates that matched an existing event (and were dropped above) may
+  // still carry a triggerMessage/source the existing hook-captured event is
+  // missing — backfill those onto the existing event in place (#223).
+  const enriched = enrichExistingEvents(stored, events);
   if (!opts.dryRun) {
     for (const ev of fresh) await appendEvent(ev);
+    for (const enrichment of enriched) await updateEvent(enrichment.id, enrichment.patch);
   }
-  return { events, fresh };
+  return { events, fresh, enriched };
 }
 
 /** Per-skill one-line summary of freshly imported events (#155). */
@@ -142,7 +153,7 @@ async function runScanOnce(opts: {
     );
   }
 
-  const { events, fresh } = await scanAndMerge({
+  const { events, fresh, enriched } = await scanAndMerge({
     since: opts.since,
     sessionId: opts.session,
     modifiedAfterMs,
@@ -178,14 +189,14 @@ async function runScanOnce(opts: {
   if (opts.dryRun) {
     console.log(
       chalk.yellow(
-        `  [dry-run] Would import ${fresh.length} new invocations (${events.length - fresh.length} already stored). Nothing written.`
+        `  [dry-run] Would import ${fresh.length} new invocations (${events.length - fresh.length} already stored), would enrich ${enriched.length} existing. Nothing written.`
       )
     );
     for (const line of freshSummary(fresh)) console.log(line);
     return;
   }
 
-  if (filtered.length === 0 && fresh.length === 0) {
+  if (filtered.length === 0 && fresh.length === 0 && enriched.length === 0) {
     console.log(chalk.yellow("  No invocations found."));
     console.log(
       chalk.gray(
@@ -198,7 +209,7 @@ async function runScanOnce(opts: {
   }
   console.log(
     chalk.green(
-      `✓  Imported ${fresh.length} new invocations (${events.length - fresh.length} already stored).`
+      `✓  Imported ${fresh.length} new invocations (${events.length - fresh.length} already stored), enriched ${enriched.length} existing.`
     )
   );
   for (const line of freshSummary(fresh)) console.log(line);
