@@ -123,6 +123,10 @@ cc-skill-trace install --provider codex
 # also requires [features].codex_hooks = true in ~/.codex/config.toml (not auto-edited)
 cc-skill-trace scan --provider codex
 
+# Scan every provider that supports retroactive scanning (currently claude-code + codex)
+# in one pass — copilot is skipped, not errored on, since it has no session logs (#227)
+cc-skill-trace scan --all-providers
+
 # GitHub Copilot CLI (hook-capture only — no retroactive scan)
 cc-skill-trace install --provider copilot
 
@@ -214,6 +218,7 @@ cc-skill-trace scan --resume             # only files touched since the last sca
 cc-skill-trace scan --dry-run            # preview counts without writing
 cc-skill-trace scan --watch              # keep importing new events as sessions grow
 cc-skill-trace scan --clear              # back up, clear, then rescan from scratch
+cc-skill-trace scan --all-providers      # scan every scan-capable provider in one pass (#227)
 ```
 
 ### Data Management
