@@ -1,13 +1,14 @@
 import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { appendFile } from "node:fs/promises";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import {
   appendEvent, readEvents, clearEvents, pruneEvents, backupEvents, pendingWriteQueueCount, selectNewEvents, DEDUP_WINDOW_MS,
   checkStore, repairStore, updateEvent, mergeStores, readLastEvent, enrichExistingEvents,
+  mergeEventSources, readEventSource,
 } from "./store.js";
 import type { SkillInvocationEvent } from "./types.js";
 
@@ -474,6 +475,96 @@ describe("store", () => {
       await appendEvent(makeEvent({ id: "only-in-b", timestamp: "2026-01-02T00:00:00.000Z" }), dirB);
       const merged = await mergeStores([dirA, dirB]);
       assert.deepEqual(merged.map((e) => e.id), ["shared", "only-in-b"]);
+    });
+  });
+
+  describe("mergeEventSources / readEventSource (#226)", () => {
+    it("reads a raw JSONL file (one event per line)", async () => {
+      const file = dir + "-merge226-a.jsonl";
+      await writeFile(
+        file,
+        `${JSON.stringify(makeEvent({ id: "a" }))}\n${JSON.stringify(makeEvent({ id: "b" }))}\n`,
+        "utf-8"
+      );
+      const events = await readEventSource(file);
+      assert.deepEqual(events.map((e) => e.id), ["a", "b"]);
+    });
+
+    it("reads a JSON array file, e.g. `export --format json` output", async () => {
+      const file = dir + "-merge226-b.json";
+      await writeFile(
+        file,
+        JSON.stringify([makeEvent({ id: "x" }), makeEvent({ id: "y" })], null, 2),
+        "utf-8"
+      );
+      const events = await readEventSource(file);
+      assert.deepEqual(events.map((e) => e.id), ["x", "y"]);
+    });
+
+    it("reads a store directory the same way mergeStores does", async () => {
+      const storeDir = dir + "-merge226-storedir";
+      await appendEvent(makeEvent({ id: "from-dir" }), storeDir);
+      const events = await readEventSource(storeDir);
+      assert.deepEqual(events.map((e) => e.id), ["from-dir"]);
+    });
+
+    it("skips malformed lines/entries in a JSONL file without losing valid ones", async () => {
+      const file = dir + "-merge226-corrupt.jsonl";
+      await writeFile(
+        file,
+        `${JSON.stringify(makeEvent({ id: "ok" }))}\nNOT VALID JSON\n${JSON.stringify({ notAnEvent: true })}\n`,
+        "utf-8"
+      );
+      const events = await readEventSource(file);
+      assert.deepEqual(events.map((e) => e.id), ["ok"]);
+    });
+
+    it("throws a clear error for a source that does not exist", async () => {
+      await assert.rejects(
+        () => readEventSource(dir + "-merge226-does-not-exist.jsonl"),
+        /Source not found or not readable/
+      );
+    });
+
+    it("merges a JSON export file, a JSONL file and a store directory, deduping by ID and sorting by timestamp", async () => {
+      const jsonFile = dir + "-merge226-c.json";
+      const jsonlFile = dir + "-merge226-c.jsonl";
+      const storeDir = dir + "-merge226-c-storedir";
+      await writeFile(
+        jsonFile,
+        JSON.stringify([
+          makeEvent({ id: "shared", timestamp: "2026-01-01T00:00:00.000Z" }),
+          makeEvent({ id: "from-json", timestamp: "2026-01-03T00:00:00.000Z" }),
+        ]),
+        "utf-8"
+      );
+      await writeFile(
+        jsonlFile,
+        `${JSON.stringify(makeEvent({ id: "shared", timestamp: "2026-01-01T00:00:00.000Z" }))}\n${JSON.stringify(makeEvent({ id: "from-jsonl", timestamp: "2026-01-02T00:00:00.000Z" }))}\n`,
+        "utf-8"
+      );
+      await appendEvent(
+        makeEvent({ id: "from-dir", timestamp: "2026-01-04T00:00:00.000Z" }),
+        storeDir
+      );
+
+      const { events, duplicates } = await mergeEventSources([jsonFile, jsonlFile, storeDir]);
+      assert.deepEqual(events.map((e) => e.id), [
+        "shared",
+        "from-jsonl",
+        "from-json",
+        "from-dir",
+      ]);
+      assert.equal(duplicates, 1);
+    });
+
+    it("propagates a clear error when one of several sources is missing", async () => {
+      const okFile = dir + "-merge226-d.jsonl";
+      await writeFile(okFile, `${JSON.stringify(makeEvent({ id: "ok" }))}\n`, "utf-8");
+      await assert.rejects(
+        () => mergeEventSources([okFile, dir + "-merge226-d-missing.jsonl"]),
+        /Source not found or not readable/
+      );
     });
   });
 

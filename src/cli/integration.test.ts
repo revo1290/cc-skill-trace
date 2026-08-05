@@ -542,3 +542,116 @@ describe("scan --all-providers (#227)", () => {
     );
   });
 });
+
+describe("merge command (#226)", () => {
+  // Own sandbox, independent of the shared "CLI integration" store above —
+  // merge reads its sources from explicit file paths, not CC_STORE_DIR.
+  let root: string;
+  let env: NodeJS.ProcessEnv;
+
+  before(async () => {
+    root = await mkdtemp(join(tmpdir(), "cc-skill-trace-merge-test-"));
+    const home = join(root, "home");
+    await mkdir(home, { recursive: true });
+    env = { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" };
+  });
+
+  after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  function run(args: string[]): string {
+    return execFileSync("node", ["--import", "tsx/esm", CLI_ENTRY, ...args], {
+      env,
+      encoding: "utf-8",
+      timeout: 15_000,
+    });
+  }
+
+  function makeEvent(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "id",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      sessionId: "sess",
+      skillName: "skill",
+      source: "claude",
+      ...overrides,
+    };
+  }
+
+  it("fails with a clear error via fail() when --out is omitted", () => {
+    const fixture = join(root, "solo.jsonl");
+    assert.throws(() => run(["merge", fixture]), /--out/);
+  });
+
+  it("fails clearly instead of crashing when a source does not exist", () => {
+    const missing = join(root, "does-not-exist.jsonl");
+    const out = join(root, "never-written", "events.jsonl");
+    try {
+      run(["merge", missing, "--out", out]);
+      assert.fail("expected merge to exit non-zero for a missing source");
+    } catch (err) {
+      const stderr = (err as { stderr?: Buffer | string }).stderr?.toString() ?? "";
+      assert.ok(stderr.includes("not found") || stderr.includes("not readable"), stderr);
+      assert.ok(
+        !/at .*\.(ts|js):\d+/.test(stderr),
+        `expected a clean error, not a raw stack trace: ${stderr}`
+      );
+    }
+  });
+
+  it("merges a JSONL file and a JSON export-array file, deduping by ID and sorting by timestamp", async () => {
+    const fixtureA = join(root, "alice-events.jsonl");
+    const fixtureB = join(root, "bob-events.json");
+    const outDir = join(root, "team-store");
+    const out = join(outDir, "events.jsonl");
+
+    await writeFile(
+      fixtureA,
+      `${JSON.stringify(makeEvent({ id: "shared", timestamp: "2026-02-01T00:00:00.000Z" }))}\n` +
+        `${JSON.stringify(makeEvent({ id: "alice-only", timestamp: "2026-02-03T00:00:00.000Z" }))}\n`,
+      "utf-8"
+    );
+    // JSON array, the shape written by `export --format json`.
+    await writeFile(
+      fixtureB,
+      JSON.stringify([
+        makeEvent({ id: "shared", timestamp: "2026-02-01T00:00:00.000Z" }), // duplicate of fixtureA
+        makeEvent({ id: "bob-only", timestamp: "2026-02-02T00:00:00.000Z" }),
+      ]),
+      "utf-8"
+    );
+
+    const stdout = run(["merge", fixtureA, fixtureB, "--out", out]);
+    assert.ok(stdout.includes("Merged"));
+    assert.ok(stdout.includes("3 events"));
+    assert.ok(stdout.includes("1 duplicate"));
+
+    const written = (await readFile(out, "utf-8"))
+      .split("\n")
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l));
+    assert.deepEqual(
+      written.map((e) => e.id),
+      ["shared", "bob-only", "alice-only"],
+      "sorted by timestamp, one copy of the duplicate id"
+    );
+
+    // The whole point of writing events.jsonl into its own directory: the
+    // result is readable back through the ordinary --store flag (#226).
+    const statsOut = run(["stats", "--store", outDir]);
+    assert.ok(statsOut.includes("Daily activity"));
+    const shown = JSON.parse(run(["show", "--json", "--store", outDir]));
+    assert.equal(shown.length, 3);
+  });
+
+  it("refuses to overwrite an existing --out file without --force", async () => {
+    const fixture = join(root, "overwrite-src.jsonl");
+    const out = join(root, "overwrite-target", "events.jsonl");
+    await writeFile(fixture, `${JSON.stringify(makeEvent({ id: "a" }))}\n`, "utf-8");
+
+    run(["merge", fixture, "--out", out]); // first write succeeds
+    assert.throws(() => run(["merge", fixture, "--out", out]), /Refusing to overwrite/);
+    run(["merge", fixture, "--out", out, "--force"]); // --force skips the prompt
+  });
+});

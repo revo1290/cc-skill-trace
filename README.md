@@ -230,6 +230,17 @@ cc-skill-trace prune --older-than 30d --dry-run   # standalone alias with a prev
 cc-skill-trace tag <event-id> --add false-positive   # label an event (or --remove)
 ```
 
+### Merge (#226)
+
+Combine events from multiple teammates/machines into one file — each `<source>` can be an `export --format json` array, a raw `events.jsonl`, or a store directory, in any mix:
+
+```bash
+cc-skill-trace merge ~/exports/alice-events.jsonl ~/exports/bob-events.json --out ./team-store/events.jsonl
+cc-skill-trace stats --store ./team-store   # --store always reads <dir>/events.jsonl
+```
+
+Events are deduplicated by ID (first occurrence wins) and sorted by timestamp — the same rule used internally by `mergeStores()`/`export --merge`.
+
 ### Install / Health
 
 ```bash

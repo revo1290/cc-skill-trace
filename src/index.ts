@@ -14,6 +14,8 @@ export {
   pruneEvents,
   updateEvent,
   mergeStores,
+  mergeEventSources,
+  readEventSource,
   checkStore,
   repairStore,
   selectNewEvents,
