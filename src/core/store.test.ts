@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import {
   appendEvent, readEvents, clearEvents, pruneEvents, backupEvents, pendingWriteQueueCount, selectNewEvents, DEDUP_WINDOW_MS,
-  checkStore, repairStore, updateEvent, mergeStores, readLastEvent,
+  checkStore, repairStore, updateEvent, mergeStores, readLastEvent, enrichExistingEvents,
 } from "./store.js";
 import type { SkillInvocationEvent } from "./types.js";
 
@@ -316,6 +316,102 @@ describe("store", () => {
       // Candidates are only compared against `existing`, never each other, so both survive.
       const fresh = selectNewEvents([], [first, second]);
       assert.deepEqual(fresh.map((e) => e.id).sort(), ["toolu_1", "toolu_2"]);
+    });
+  });
+
+  describe("enrichExistingEvents (#223)", () => {
+    // A candidate dropped by selectNewEvents (matches an existing event by id
+    // or sameInvocation) isn't necessarily redundant — scan can carry a
+    // triggerMessage/source the hook-captured event was never able to record.
+    const hookEvent = makeEvent({
+      id: "uuid-random-1234",
+      timestamp: "2026-01-01T00:00:01.000Z",
+      sessionId: "s1",
+      skillName: "commit",
+      source: "claude",
+    });
+    const scanOfSameInvocation = makeEvent({
+      id: "toolu_abc123",
+      timestamp: "2026-01-01T00:00:02.500Z",
+      sessionId: "s1",
+      skillName: "commit",
+      source: "user",
+      triggerMessage: "please commit this",
+    });
+
+    it("backfills triggerMessage onto the existing event when it has none", () => {
+      const enrichments = enrichExistingEvents(
+        [{ ...hookEvent, source: "user" }],
+        [{ ...scanOfSameInvocation, source: "user" }]
+      );
+      assert.deepEqual(enrichments, [
+        { id: "uuid-random-1234", patch: { triggerMessage: "please commit this" } },
+      ]);
+    });
+
+    it("upgrades source from \"claude\" to \"user\" when scan found stronger evidence", () => {
+      const enrichments = enrichExistingEvents(
+        [{ ...hookEvent, triggerMessage: "already have one" }],
+        [{ ...scanOfSameInvocation, triggerMessage: "already have one" }]
+      );
+      assert.deepEqual(enrichments, [{ id: "uuid-random-1234", patch: { source: "user" } }]);
+    });
+
+    it("backfills both triggerMessage and source in one patch when both are missing", () => {
+      const enrichments = enrichExistingEvents([hookEvent], [scanOfSameInvocation]);
+      assert.deepEqual(enrichments, [
+        {
+          id: "uuid-random-1234",
+          patch: { triggerMessage: "please commit this", source: "user" },
+        },
+      ]);
+    });
+
+    it("never downgrades source from \"user\" to \"claude\"", () => {
+      const existingUser = { ...hookEvent, source: "user" as const, triggerMessage: "keep me" };
+      const candidateClaude = { ...scanOfSameInvocation, source: "claude" as const };
+      const enrichments = enrichExistingEvents([existingUser], [candidateClaude]);
+      assert.deepEqual(enrichments, []);
+    });
+
+    it("never overwrites an existing triggerMessage with the candidate's", () => {
+      const existingWithMessage = { ...hookEvent, triggerMessage: "original message" };
+      const enrichments = enrichExistingEvents([existingWithMessage], [scanOfSameInvocation]);
+      // source is still upgraded, but triggerMessage is left untouched.
+      assert.deepEqual(enrichments, [{ id: "uuid-random-1234", patch: { source: "user" } }]);
+    });
+
+    it("produces no enrichment when nothing new is available", () => {
+      const alreadyRich = { ...hookEvent, source: "user" as const, triggerMessage: "already have one" };
+      const enrichments = enrichExistingEvents([alreadyRich], [scanOfSameInvocation]);
+      assert.deepEqual(enrichments, []);
+    });
+
+    it("produces no enrichment when the candidate does not match any existing event", () => {
+      const otherSession = { ...scanOfSameInvocation, sessionId: "s2" };
+      const enrichments = enrichExistingEvents([hookEvent], [otherSession]);
+      assert.deepEqual(enrichments, []);
+    });
+
+    it("leaves every field other than triggerMessage/source untouched", () => {
+      const enrichments = enrichExistingEvents([hookEvent], [scanOfSameInvocation]);
+      assert.deepEqual(Object.keys(enrichments[0]!.patch).sort(), ["source", "triggerMessage"]);
+    });
+
+    it("enriches the existing hook-captured event in the store via updateEvent, without creating a duplicate (#223)", async () => {
+      const enrichDir = dir + "-enrich";
+      await appendEvent(hookEvent, enrichDir);
+      const stored = await readEvents(enrichDir);
+      const enrichments = enrichExistingEvents(stored, [scanOfSameInvocation]);
+      assert.equal(enrichments.length, 1);
+      for (const e of enrichments) await updateEvent(e.id, e.patch, enrichDir);
+
+      const after = await readEvents(enrichDir);
+      assert.equal(after.length, 1, "the scan candidate must not be appended as a second row");
+      assert.equal(after[0]!.id, hookEvent.id, "the original hook-captured id is preserved");
+      assert.equal(after[0]!.recordedVia, hookEvent.recordedVia);
+      assert.equal(after[0]!.triggerMessage, "please commit this");
+      assert.equal(after[0]!.source, "user");
     });
   });
 

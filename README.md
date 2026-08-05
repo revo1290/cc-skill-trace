@@ -287,7 +287,7 @@ cc-skill-trace completion zsh >> ~/.zshrc   # shell completion: bash | zsh | fis
 
 ### 2. Retroactive scan
 
-`~/.claude/projects/**/*.jsonl` session logs are parsed to extract past skill invocations, including the user message that preceded each one (the "trigger"). Scanned events are matched against already-captured hook events by session, skill, args and a time window — so backfilling never creates duplicates.
+`~/.claude/projects/**/*.jsonl` session logs are parsed to extract past skill invocations, including the user message that preceded each one (the "trigger"). Scanned events are matched against already-captured hook events by session, skill, args and a time window, so backfilling never creates duplicates — instead, a match enriches the existing hook-captured event in place: a missing `triggerMessage` is filled in, and `source` is upgraded from `"claude"` to `"user"` when scan finds stronger evidence of an explicit invocation (e.g. an explicit `$SkillName` mention). Fields are only ever added, never overwritten or downgraded. Run `cc-skill-trace scan` periodically (or `scan --resume`) to keep real-time-captured events enriched.
 
 ### 3. Claude Code skill (`/skill-trace`)
 

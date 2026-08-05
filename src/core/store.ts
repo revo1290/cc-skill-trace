@@ -246,6 +246,64 @@ export function selectNewEvents(
   return fresh;
 }
 
+// ─── Enriching hook-captured events from scan (#223) ─────────────────────────
+// A candidate dropped by `selectNewEvents` (because it matches an existing
+// event by id or by `sameInvocation`) isn't necessarily redundant: scan reads
+// the full session log, so it can carry a `triggerMessage` the hook-captured
+// event was never able to record (the PreToolUse payload has no preceding
+// message text), and — for providers like Codex — a more confident `source`
+// determination (e.g. an explicit `$SkillName` mention) than the hook could
+// make on its own. `enrichExistingEvents` finds those matches and reports
+// only the fields that should be backfilled onto the *existing* stored event,
+// leaving every other field (id, timestamp, sessionId, skillArgs, provider,
+// recordedVia, outcome, durationMs, tags, ...) untouched.
+
+/** A backfill patch for one already-stored event, computed by {@link enrichExistingEvents}. */
+export interface EventEnrichment {
+  /** ID of the existing stored event to patch (via {@link updateEvent}). */
+  id: string;
+  /** Only ever contains `triggerMessage` and/or `source` — additive fields only. */
+  patch: Partial<Pick<SkillInvocationEvent, "triggerMessage" | "source">>;
+}
+
+/**
+ * From freshly scanned `candidates`, compute enrichment patches for matching
+ * `existing` events (#223). A candidate "matches" an existing event the same
+ * way `selectNewEvents` decides to drop it: same id, or {@link sameInvocation}.
+ *
+ * Only two fields are ever backfilled, and only when they add information:
+ *  - `triggerMessage`: copied over when the existing event is missing one and
+ *    the candidate has one.
+ *  - `source`: upgraded from `"claude"` to `"user"` when the candidate found
+ *    stronger evidence of an explicit invocation. Never downgraded the other
+ *    way — enrichment only ever adds information, never removes it.
+ *
+ * Existing events with nothing to add are omitted from the result, so callers
+ * can skip a no-op `updateEvent` write.
+ */
+export function enrichExistingEvents(
+  existing: SkillInvocationEvent[],
+  candidates: SkillInvocationEvent[]
+): EventEnrichment[] {
+  const enrichments: EventEnrichment[] = [];
+  for (const candidate of candidates) {
+    const match = existing.find((e) => e.id === candidate.id || sameInvocation(e, candidate));
+    if (!match) continue;
+
+    const patch: EventEnrichment["patch"] = {};
+    if (match.triggerMessage == null && candidate.triggerMessage != null) {
+      patch.triggerMessage = candidate.triggerMessage;
+    }
+    if (match.source === "claude" && candidate.source === "user") {
+      patch.source = "user";
+    }
+    if (Object.keys(patch).length > 0) {
+      enrichments.push({ id: match.id, patch });
+    }
+  }
+  return enrichments;
+}
+
 /** Delete all events (truncates the file). */
 export function clearEvents(dir = getStoreDir()): Promise<void> {
   return enqueueWrite(dir, async () => {

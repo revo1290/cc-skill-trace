@@ -76,7 +76,7 @@ src/
 5. `cc-skill-trace show` → events.jsonl を読んで **ターミナルダッシュボード**を表示
 6. `/skill-trace` (Claude Code 内) → SKILL.md の指示に従い Claude が `cc-skill-trace show --scan --terse` を実行して結果を解説
 7. `cc-skill-trace report` → events.jsonl を読んで HTML を生成しブラウザで開く
-8. `cc-skill-trace scan` → `~/.claude/projects/**/*.jsonl` を遡ってバックフィル。hook 由来イベントとは `selectNewEvents`（session+skill+args+時刻窓）で突合し二重登録を防ぐ
+8. `cc-skill-trace scan` → `~/.claude/projects/**/*.jsonl` を遡ってバックフィル。hook 由来イベントとは `selectNewEvents`（session+skill+args+時刻窓）で突合し二重登録を防ぐ。一致した場合は `enrichExistingEvents` が既存イベントの `triggerMessage`/`source` を `updateEvent` で事後補完する（#223）
 
 ### Key design decisions
 
@@ -110,9 +110,14 @@ src/
 
 ### hook-capture と triggerMessage の制限
 
-リアルタイムフック（`hook-capture`）経由で記録されたイベントには `triggerMessage` が含まれない。  
-`triggerMessage` は `cc-skill-trace scan` によるセッションログのバックフィルでのみ取得できる。  
-これは PreToolUse フックのペイロードに直前のユーザーメッセージが含まれないため。
+リアルタイムフック（`hook-capture`）経由で記録された時点のイベントには `triggerMessage` が含まれない。  
+これは PreToolUse フックのペイロードに直前のユーザーメッセージが含まれないため（恒久的な制限）。
+
+ただし `cc-skill-trace scan` を実行すると、同一の発動をセッションログから再検出し、`store.ts` の
+`enrichExistingEvents`（#223）が欠落している `triggerMessage` を**既存の hook イベントに事後的に補完**する（新しい行として二重登録はしない）。
+`source` も、hook 側が `"claude"`（不明/デフォルト）で scan 側がより確度の高い判定（例: Codex の `$SkillName` 明示呼び出し、
+Claude Code のスラッシュコマンド判定）を持つ場合に `"user"` へ upgrade される。値の追加のみを行い、既存値の上書き・劣化（`"user"` → `"claude"`）はしない。
+つまり `hook-capture` 単体では `triggerMessage` は恒久的に欠落するが、その後 `scan` を実行すれば事後的に埋まる。
 
 ### テストを追加する場所
 
