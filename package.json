@@ -68,6 +68,7 @@
     "lint:fix": "biome lint src --write",
     "format": "biome format src --write",
     "format:check": "biome format src",
+    "docs": "typedoc",
     "test": "node --import tsx/esm --test src/core/config.test.ts src/core/filter.test.ts src/core/analyze.test.ts src/core/store.test.ts src/core/parser.test.ts src/core/utils.test.ts src/core/providers/skill-md.test.ts src/core/providers/codex.test.ts src/core/providers/copilot.test.ts src/core/providers/index.test.ts src/core/providers/scan.test.ts src/cli/ui.test.ts src/cli/format.test.ts src/cli/web-report.test.ts src/cli/duration.test.ts src/cli/follow.test.ts src/cli/skill-md.test.ts src/cli/atomic-write.test.ts src/cli/copy-skill.test.ts src/cli/version.test.ts src/cli/hooks.test.ts src/cli/commands/export.test.ts src/cli/commands/capture.test.ts src/skill/skill-md.test.ts src/cli/integration.test.ts",
     "test:unit": "node --import tsx/esm --test src/core/config.test.ts src/core/filter.test.ts src/core/analyze.test.ts src/core/store.test.ts src/core/parser.test.ts src/core/utils.test.ts src/core/providers/skill-md.test.ts src/core/providers/codex.test.ts src/core/providers/copilot.test.ts src/core/providers/index.test.ts src/core/providers/scan.test.ts src/cli/ui.test.ts src/cli/format.test.ts src/cli/web-report.test.ts src/cli/duration.test.ts src/cli/follow.test.ts src/cli/skill-md.test.ts src/cli/atomic-write.test.ts src/cli/copy-skill.test.ts src/cli/version.test.ts src/cli/hooks.test.ts src/cli/commands/export.test.ts src/cli/commands/capture.test.ts src/skill/skill-md.test.ts",
     "prepare": "npm run build",
@@ -81,6 +82,8 @@
     "@biomejs/biome": "^2.4.13",
     "@types/node": "^20.14.0",
     "tsx": "^4.21.0",
+    "typedoc": "^0.28.20",
+    "typedoc-plugin-markdown": "^4.12.0",
     "typescript": "^5.4.5"
   }
 }

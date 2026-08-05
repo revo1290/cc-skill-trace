@@ -1,0 +1,63 @@
+name: Docs
+
+# Builds the TypeDoc API reference (docs/api/, generated from src/index.ts and
+# its re-exports) and publishes it to GitHub Pages on every push to main.
+#
+# IMPORTANT: this requires GitHub Pages to be enabled once by a repository
+# owner before the "Deploy to GitHub Pages" step can actually publish
+# anything: Settings → Pages → Source: GitHub Actions.
+# Until that's done, this workflow still runs on every push to main (so the
+# docs build itself stays verified), but the deploy job will fail with "Pages
+# site not configured" or similar. That failure is expected, does not block
+# CI/merges/releases, and only means the hosted docs aren't live yet (#133).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# GitHub Pages deployments must not run concurrently, or a later run's
+# artifact can be overwritten mid-deploy by an earlier one. Don't cancel an
+# in-flight deploy either — let it finish before the next one starts.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build API docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run docs
+
+      - name: Upload API docs artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: docs/api
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

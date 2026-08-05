@@ -364,6 +364,20 @@ See [`schemas/skill-invocation-event.schema.json`](schemas/skill-invocation-even
 
 ---
 
+## API Reference
+
+Full API docs (generated from `src/index.ts` and its re-exports with [TypeDoc](https://typedoc.org/)) can be generated locally:
+
+```bash
+npm run docs
+```
+
+This writes Markdown pages to `docs/api/`. `docs/api/README.md` is the entry point.
+
+CI-driven publishing to GitHub Pages is set up (see [`.github/workflows/docs.yml`](.github/workflows/docs.yml)) but requires the repository owner to enable Pages once (Settings → Pages → Source: GitHub Actions) before the hosted docs go live — see the workflow file's header comment for details.
+
+---
+
 ## Troubleshooting
 
 **`cc-skill-trace: command not found` after `npm install -g`**
