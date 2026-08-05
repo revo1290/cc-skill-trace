@@ -10,7 +10,12 @@ user-invocable: true
 
 ```bash
 which cc-skill-trace 2>/dev/null || where cc-skill-trace 2>/dev/null || { echo "NOT INSTALLED: npm install -g cc-skill-trace && cc-skill-trace install"; exit 0; }
-cc-skill-trace show --scan --terse -n 15 2>/dev/null
+ARGS="{{args}}"
+if [ -n "$ARGS" ]; then
+  cc-skill-trace show --scan --terse $ARGS 2>/dev/null
+else
+  cc-skill-trace show --scan --terse -n 15 2>/dev/null
+fi
 ```
 
 Show output verbatim. 2-sentence summary: auto-trigger rate; any skill auto-fired without clear user intent (suggest narrowing its `description:`). Offer: `report`, `--skill <name>`, `--since YYYY-MM-DD`.
