@@ -417,7 +417,7 @@ async function runDoctor(opts: { checkStore?: boolean; fixStore?: boolean }): Pr
 
   if (!storeOnly) {
     // Node version
-    const major = parseInt(process.versions.node.split(".")[0]!, 10);
+    const major = parseInt(process.versions.node.split(".")[0] ?? "0", 10);
     if (major >= 18) ok(`Node.js ${process.version} (>= 18)`);
     else bad(`Node.js ${process.version} — requires >= 18`);
 

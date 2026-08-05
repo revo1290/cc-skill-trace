@@ -165,11 +165,17 @@ export interface SkillStat {
 export function buildStats(events: SkillInvocationEvent[]): SkillStat[] {
   const map: Record<string, SkillStat> = {};
   for (const ev of events) {
-    if (!map[ev.skillName])
-      map[ev.skillName] = { name: ev.skillName, total: 0, auto: 0, byUser: 0, autoRate: 0 };
-    map[ev.skillName]!.total++;
-    if (ev.source === "claude") map[ev.skillName]!.auto++;
-    else map[ev.skillName]!.byUser++;
+    const stat = map[ev.skillName] ?? {
+      name: ev.skillName,
+      total: 0,
+      auto: 0,
+      byUser: 0,
+      autoRate: 0,
+    };
+    map[ev.skillName] = stat;
+    stat.total++;
+    if (ev.source === "claude") stat.auto++;
+    else stat.byUser++;
   }
   const stats = Object.values(map);
   for (const s of stats) s.autoRate = s.total === 0 ? 0 : Math.round((s.auto / s.total) * 100);
@@ -215,9 +221,10 @@ export function renderStats(events: SkillInvocationEvent[], opts: RenderStatsOpt
   const dayMap: Record<string, { total: number; auto: number }> = {};
   for (const ev of events) {
     const day = ev.timestamp.slice(0, 10);
-    if (!dayMap[day]) dayMap[day] = { total: 0, auto: 0 };
-    dayMap[day]!.total++;
-    if (ev.source === "claude") dayMap[day]!.auto++;
+    const stat = dayMap[day] ?? { total: 0, auto: 0 };
+    dayMap[day] = stat;
+    stat.total++;
+    if (ev.source === "claude") stat.auto++;
   }
   const days = Object.keys(dayMap).sort().slice(-dayWindow);
   const maxDay = Math.max(...days.map((d) => dayMap[d]?.total), 1);
@@ -227,6 +234,7 @@ export function renderStats(events: SkillInvocationEvent[], opts: RenderStatsOpt
   lines.push(section("  📅 Daily activity") + chalk.gray(`  (last ${dayWindow} days)`));
   lines.push("");
   for (const day of days) {
+    // biome-ignore lint/style/noNonNullAssertion: `days` is Object.keys(dayMap) (sorted/sliced), so every `day` here is a key that exists in dayMap.
     const d = dayMap[day]!;
     const autoB = "█".repeat(Math.round((d.auto / maxDay) * dayBarW));
     const userFill = Math.min(

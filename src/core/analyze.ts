@@ -206,6 +206,7 @@ export function computeStreaks(events: SkillInvocationEvent[], today = new Date(
   const dayMs = 24 * 60 * 60 * 1000;
   const toUtc = (s: string) => Date.parse(`${s}T00:00:00Z`);
   for (let i = 1; i < sorted.length; i++) {
+    // biome-ignore lint/style/noNonNullAssertion: i is in [1, sorted.length), so both sorted[i] and sorted[i - 1] are within bounds.
     if (toUtc(sorted[i]!) - toUtc(sorted[i - 1]!) === dayMs) run++;
     else run = 1;
     if (run > longest) longest = run;
@@ -281,6 +282,7 @@ export function estimateCost(events: SkillInvocationEvent[], model = "sonnet"): 
     : model.toLowerCase().includes("haiku")
       ? "haiku"
       : "sonnet";
+  // biome-ignore lint/style/noNonNullAssertion: key is narrowed to one of "opus"/"haiku"/"sonnet" above, and MODEL_INPUT_PRICES_PER_MTOK defines an entry for each.
   const price = MODEL_INPUT_PRICES_PER_MTOK[key]!;
   const perSkill = new Map<string, number>();
   let total = 0;

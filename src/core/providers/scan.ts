@@ -13,11 +13,8 @@ export async function extractAllInvocationsForProvider(
   provider: Provider,
   opts: ExtractAllOptions = {}
 ): Promise<SkillInvocationEvent[]> {
-  if (
-    !provider.supportsScan ||
-    !provider.listSessionFiles ||
-    !provider.extractInvocationsFromFile
-  ) {
+  const { extractInvocationsFromFile } = provider;
+  if (!provider.supportsScan || !provider.listSessionFiles || !extractInvocationsFromFile) {
     throw new Error(`${provider.displayName} does not support scanning session logs.`);
   }
   const skills = await provider.listInstalledSkills();
@@ -27,7 +24,8 @@ export async function extractAllInvocationsForProvider(
     fileInfos = await provider.listSessionFiles();
   }
   if (opts.modifiedAfterMs != null) {
-    fileInfos = fileInfos.filter((f) => f.mtimeMs > opts.modifiedAfterMs!);
+    const modifiedAfterMs = opts.modifiedAfterMs;
+    fileInfos = fileInfos.filter((f) => f.mtimeMs > modifiedAfterMs);
   }
   let files = fileInfos.map((f) => f.path);
   if (opts.files) {
@@ -40,7 +38,7 @@ export async function extractAllInvocationsForProvider(
   const concurrency = Math.max(1, parseInt(process.env.CC_SCAN_CONCURRENCY ?? "8", 10) || 8);
   await mapWithLimit(files, concurrency, async (file) => {
     try {
-      const events = await provider.extractInvocationsFromFile!(file, skills, opts);
+      const events = await extractInvocationsFromFile(file, skills, opts);
       for (const ev of events) {
         if (opts.since && ev.timestamp < opts.since) continue;
         if (opts.sessionId && ev.sessionId !== opts.sessionId) continue;

@@ -208,6 +208,7 @@ async function extractInvocationsFromFile(
   const events: SkillInvocationEvent[] = [];
 
   for (let i = 0; i < entries.length; i++) {
+    // biome-ignore lint/style/noNonNullAssertion: i is bounded by entries.length above.
     const entry = entries[i]!;
     if (entry.type !== "response_item") continue;
     const p = entry.payload;
@@ -220,6 +221,7 @@ async function extractInvocationsFromFile(
     // Find the nearest preceding user message for the trigger text.
     let triggerMessage: string | undefined;
     for (let j = i - 1; j >= 0; j--) {
+      // biome-ignore lint/style/noNonNullAssertion: j starts at i - 1 (i < entries.length from the outer loop) and only decreases while j >= 0, so it stays in bounds.
       const prev = entries[j]!;
       if (prev.type !== "response_item") continue;
       const text = userMessageText(prev.payload);
@@ -241,6 +243,7 @@ async function extractInvocationsFromFile(
     const callId = p.call_id;
     if (callId) {
       for (let j = i + 1; j < Math.min(i + 6, entries.length); j++) {
+        // biome-ignore lint/style/noNonNullAssertion: j < Math.min(i + 6, entries.length) guarantees j is in bounds.
         const next = entries[j]!;
         if (next.type !== "response_item") continue;
         const np = next.payload;

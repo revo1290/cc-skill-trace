@@ -194,6 +194,7 @@ export async function readLastEvent(
     .filter((l) => l.trim());
   for (let i = lines.length - 1; i >= 0; i--) {
     try {
+      // biome-ignore lint/style/noNonNullAssertion: i is bounded by lines.length above.
       return JSON.parse(lines[i]!) as SkillInvocationEvent;
     } catch {
       // tail may begin mid-line; keep walking backwards
@@ -406,6 +407,7 @@ export async function checkStore(dir = getStoreDir()): Promise<StoreCheckResult>
   const dupes = new Set<string>();
   const lines = raw.split("\n");
   for (let i = 0; i < lines.length; i++) {
+    // biome-ignore lint/style/noNonNullAssertion: i is bounded by lines.length above.
     const line = lines[i]!;
     if (!line.trim()) continue;
     result.totalLines++;
