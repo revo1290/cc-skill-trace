@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import { getStoreDir, loadState, saveState } from "../../core/config.js";
 import { extractAllInvocations, listSessionFiles, newestMtimeMs } from "../../core/parser.js";
 import type { ExtractAllOptions } from "../../core/parser.js";
-import { getProvider } from "../../core/providers/index.js";
+import { ALL_PROVIDER_IDS, getProvider } from "../../core/providers/index.js";
 import { extractAllInvocationsForProvider } from "../../core/providers/scan.js";
 import {
   appendEvent,
@@ -20,7 +20,7 @@ import type { ProviderId, SkillInvocationEvent } from "../../core/types.js";
 import { getConfig } from "../context.js";
 import { buildStats, renderDashboard } from "../format.js";
 import { parseDateOpt, parseProviderOpt, validateDateRange } from "../options.js";
-import { vlog } from "../ui.js";
+import { fail, vlog } from "../ui.js";
 
 /** Render scan progress with percent, ETA and current file (#140). */
 function makeProgressRenderer(): (done: number, total: number, file?: string) => void {
@@ -114,6 +114,50 @@ function freshSummary(fresh: SkillInvocationEvent[]): string[] {
   return lines;
 }
 
+/**
+ * Back up the store then clear it (scan --clear, #180). Shared by the
+ * single-provider and --all-providers scan paths so a multi-provider run
+ * only clears once, up front, rather than per provider (#227).
+ */
+async function clearStoreWithBackup(): Promise<void> {
+  const { backupPath, rotatedTo } = await backupEvents();
+  if (backupPath) {
+    if (rotatedTo) console.log(chalk.gray(`  Previous backup moved to ${rotatedTo}`));
+    console.log(chalk.gray(`  Backup saved to ${backupPath}`));
+    console.log(
+      chalk.gray(`  To restore: cp ${backupPath} ${join(getStoreDir(), "events.jsonl")}`)
+    );
+  }
+  await clearEvents();
+  console.log(chalk.gray("  Cleared."));
+}
+
+/** Resolve the resume cursor (last-scanned mtime) for one provider (#165, #227). */
+async function resumeCursorFor(providerId: ProviderId): Promise<number | undefined> {
+  const state = await loadState();
+  return providerId === "claude-code"
+    ? state.lastScanMtimeMs
+    : state.lastScanMtimeMsByProvider?.[providerId];
+}
+
+/** Persist the resume cursor for one provider after a scan that wrote to the store (#165, #227). */
+async function saveResumeCursor(providerId: ProviderId): Promise<void> {
+  if (providerId === "claude-code") {
+    const files = await listSessionFiles();
+    await saveState({ lastScanMtimeMs: newestMtimeMs(files) });
+    return;
+  }
+  const provider = getProvider(providerId);
+  const files = (await provider.listSessionFiles?.()) ?? [];
+  const state = await loadState();
+  await saveState({
+    lastScanMtimeMsByProvider: {
+      ...state.lastScanMtimeMsByProvider,
+      [providerId]: newestMtimeMs(files),
+    },
+  });
+}
+
 async function runScanOnce(opts: {
   since?: string;
   before?: string;
@@ -128,26 +172,12 @@ async function runScanOnce(opts: {
   validateDateRange(opts.since, opts.before);
   const providerId = opts.provider ?? "claude-code";
   if (opts.clear && !opts.dryRun) {
-    // Back up before clearing so a mid-scan failure can't destroy history (#180).
-    const { backupPath, rotatedTo } = await backupEvents();
-    if (backupPath) {
-      if (rotatedTo) console.log(chalk.gray(`  Previous backup moved to ${rotatedTo}`));
-      console.log(chalk.gray(`  Backup saved to ${backupPath}`));
-      console.log(
-        chalk.gray(`  To restore: cp ${backupPath} ${join(getStoreDir(), "events.jsonl")}`)
-      );
-    }
-    await clearEvents();
-    console.log(chalk.gray("  Cleared."));
+    await clearStoreWithBackup();
   }
 
   let modifiedAfterMs: number | undefined;
   if (opts.resume) {
-    const state = await loadState();
-    modifiedAfterMs =
-      providerId === "claude-code"
-        ? state.lastScanMtimeMs
-        : state.lastScanMtimeMsByProvider?.[providerId];
+    modifiedAfterMs = await resumeCursorFor(providerId);
     vlog(
       `resume: only files modified after ${modifiedAfterMs ? new Date(modifiedAfterMs).toISOString() : "(never scanned)"}`
     );
@@ -163,20 +193,7 @@ async function runScanOnce(opts: {
   });
 
   if (!opts.dryRun) {
-    if (providerId === "claude-code") {
-      const files = await listSessionFiles();
-      await saveState({ lastScanMtimeMs: newestMtimeMs(files) });
-    } else {
-      const provider = getProvider(providerId);
-      const files = (await provider.listSessionFiles?.()) ?? [];
-      const state = await loadState();
-      await saveState({
-        lastScanMtimeMsByProvider: {
-          ...state.lastScanMtimeMsByProvider,
-          [providerId]: newestMtimeMs(files),
-        },
-      });
-    }
+    await saveResumeCursor(providerId);
   }
 
   let filtered = events;
@@ -214,6 +231,63 @@ async function runScanOnce(opts: {
   );
   for (const line of freshSummary(fresh)) console.log(line);
   console.log(`\n${renderDashboard(filtered)}`);
+}
+
+/**
+ * Scan every provider that supports retroactive session-log scanning, one
+ * after another, printing a compact per-provider summary line rather than a
+ * full dashboard per provider (scan --all-providers, #227). Providers without
+ * scan support (currently copilot) are silently skipped — not an error.
+ */
+async function runScanAllProviders(opts: {
+  since?: string;
+  session?: string;
+  clear?: boolean;
+  dryRun?: boolean;
+  resume?: boolean;
+  capture?: boolean;
+}): Promise<void> {
+  if (opts.clear && !opts.dryRun) {
+    await clearStoreWithBackup();
+  }
+
+  const scannableIds = ALL_PROVIDER_IDS.filter((id) => getProvider(id).supportsScan);
+
+  for (const providerId of scannableIds) {
+    let modifiedAfterMs: number | undefined;
+    if (opts.resume) {
+      modifiedAfterMs = await resumeCursorFor(providerId);
+      vlog(
+        `resume (${providerId}): only files modified after ${modifiedAfterMs ? new Date(modifiedAfterMs).toISOString() : "(never scanned)"}`
+      );
+    }
+
+    const { events, fresh } = await scanAndMerge({
+      since: opts.since,
+      sessionId: opts.session,
+      modifiedAfterMs,
+      dryRun: opts.dryRun,
+      noCapture: opts.capture === false,
+      provider: providerId,
+    });
+
+    if (!opts.dryRun) {
+      await saveResumeCursor(providerId);
+    }
+
+    const label = chalk.bold(`  ${providerId}:`);
+    if (opts.dryRun) {
+      console.log(
+        `${label} ${chalk.yellow(`[dry-run] Would import ${fresh.length} new invocations (${events.length - fresh.length} already stored).`)}`
+      );
+    } else if (events.length === 0 && fresh.length === 0) {
+      console.log(`${label} ${chalk.yellow("No invocations found.")}`);
+    } else {
+      console.log(
+        `${label} ${chalk.green(`Imported ${fresh.length} new invocations (${events.length - fresh.length} already stored).`)}`
+      );
+    }
+  }
 }
 
 /** Poll session files and import new events as they appear (#128). */
@@ -280,7 +354,24 @@ export function registerScanCommand(program: Command): void {
       "Agent CLI to scan: claude-code (default), codex — copilot has no session logs to scan (#v3-multi-provider)",
       parseProviderOpt
     )
+    .option(
+      "--all-providers",
+      "Scan every provider that supports retroactive log scanning (currently claude-code + codex; copilot is skipped) — mutually exclusive with --provider (#227)"
+    )
     .action(async (opts) => {
+      if (opts.allProviders && opts.provider) {
+        fail("--all-providers and --provider are mutually exclusive — drop one.");
+      }
+      if (opts.allProviders && opts.watch) {
+        fail(
+          "--all-providers does not support --watch. Run scan --watch --provider <id> for one provider at a time."
+        );
+      }
+      if (opts.allProviders) {
+        await runScanAllProviders(opts);
+        return;
+      }
+
       const providerId: ProviderId = opts.provider ?? "claude-code";
       if (providerId !== "claude-code" && !getProvider(providerId).supportsScan) {
         console.log(

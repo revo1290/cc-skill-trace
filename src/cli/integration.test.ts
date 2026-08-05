@@ -5,7 +5,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -371,5 +371,174 @@ describe("multi-provider install/hook-capture (#v3-multi-provider)", () => {
     assert.ok(out.includes("removed from"));
     const settings = JSON.parse(await readFile(join(home, ".codex", "hooks.json"), "utf-8"));
     assert.equal((settings.hooks.PreToolUse ?? []).length, 0);
+  });
+});
+
+describe("scan --all-providers (#227)", () => {
+  let home: string;
+  let store: string;
+  let projects: string;
+  let env: NodeJS.ProcessEnv;
+  const oldCodexMtime = new Date("2020-01-01T00:00:00.000Z");
+
+  before(async () => {
+    const root = await mkdtemp(join(tmpdir(), "cc-skill-trace-scan-all-test-"));
+    home = join(root, "home");
+    store = join(root, "store");
+    projects = join(root, "projects", "fake-project");
+    await mkdir(home, { recursive: true });
+    await mkdir(store, { recursive: true });
+    await mkdir(projects, { recursive: true });
+    env = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      CC_STORE_DIR: store,
+      CC_PROJECTS_DIR: join(root, "projects"),
+      NO_COLOR: "1",
+    };
+
+    // Claude Code fixture: one Skill tool_use in a fabricated session log.
+    await writeFile(
+      join(projects, "sess1.jsonl"),
+      jsonl([
+        {
+          type: "message",
+          timestamp: "2026-01-05T09:00:00.000Z",
+          sessionId: "cc-sess1",
+          message: { role: "user", content: "help me commit" },
+        },
+        {
+          type: "message",
+          timestamp: "2026-01-05T09:00:01.000Z",
+          sessionId: "cc-sess1",
+          message: {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "tu-1", name: "Skill", input: { skill: "commit" } }],
+          },
+        },
+      ])
+    );
+
+    // Codex fixture: an installed skill + a rollout file referencing its SKILL.md path.
+    // The rollout file's mtime is pinned to the past so a later test can add a *new*
+    // rollout file and prove --resume only picks up files newer than the saved cursor.
+    const codexSkillDir = join(home, ".codex", "skills", "github");
+    await mkdir(codexSkillDir, { recursive: true });
+    const codexSkillPath = join(codexSkillDir, "SKILL.md");
+    await writeFile(codexSkillPath, "---\nname: github\ndescription: Work with GitHub\n---\n");
+
+    const codexSessDir = join(home, ".codex", "sessions", "2020", "01", "01");
+    await mkdir(codexSessDir, { recursive: true });
+    const codexRolloutPath = join(codexSessDir, "rollout-2020-01-01T00-00-00-uuid1.jsonl");
+    await writeFile(
+      codexRolloutPath,
+      jsonl([
+        { type: "session_meta", payload: { id: "codex-sess1", cwd: "/repo" } },
+        {
+          type: "response_item",
+          timestamp: "2020-01-01T00:00:36.000Z",
+          payload: {
+            type: "function_call",
+            name: "exec_command",
+            call_id: "call_1",
+            arguments: JSON.stringify({ cmd: `sed -n '1,220p' ${codexSkillPath}` }),
+          },
+        },
+      ])
+    );
+    await utimes(codexRolloutPath, oldCodexMtime, oldCodexMtime);
+
+    // Copilot fixture: a skill is installed, but copilot has no scannable session-log
+    // format — this proves --all-providers skips it silently rather than erroring.
+    const copilotSkillDir = join(home, ".copilot", "skills", "pdf");
+    await mkdir(copilotSkillDir, { recursive: true });
+    await writeFile(join(copilotSkillDir, "SKILL.md"), "---\nname: pdf\ndescription: PDF tools\n---\n");
+  });
+
+  after(async () => {
+    await rm(join(home, ".."), { recursive: true, force: true });
+  });
+
+  function run(args: string[], input?: string): string {
+    return execFileSync("node", ["--import", "tsx/esm", CLI_ENTRY, ...args], {
+      env, encoding: "utf-8", input: input ?? "", timeout: 15_000,
+    });
+  }
+
+  it("rejects --all-providers combined with --provider", () => {
+    assert.throws(() => run(["scan", "--all-providers", "--provider", "codex"]));
+  });
+
+  it("rejects --all-providers combined with --watch", () => {
+    assert.throws(() => run(["scan", "--all-providers", "--watch"]));
+  });
+
+  it("--help lists the --all-providers flag", () => {
+    const out = run(["scan", "--help"]);
+    assert.ok(out.includes("--all-providers"));
+  });
+
+  it("scans every scan-capable provider and prints a per-provider summary line, skipping copilot", async () => {
+    const out = run(["scan", "--all-providers"]);
+    assert.ok(out.includes("claude-code: Imported 1 new invocations"), out);
+    assert.ok(out.includes("codex: Imported 1 new invocations"), out);
+    assert.ok(!out.includes("copilot"), "copilot has no session logs to scan and must be skipped silently");
+
+    const raw = await readFile(join(store, "events.jsonl"), "utf-8");
+    const events = raw
+      .split("\n")
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l));
+    // A missing `provider` field on a stored event always means claude-code (#v3-multi-provider).
+    const providers = events.map((e) => e.provider ?? "claude-code").sort();
+    assert.deepEqual(providers, ["claude-code", "codex"]);
+  });
+
+  it("is idempotent — re-running --all-providers imports zero new events for every provider", () => {
+    const out = run(["scan", "--all-providers"]);
+    assert.ok(out.includes("claude-code: Imported 0 new invocations"), out);
+    assert.ok(out.includes("codex: Imported 0 new invocations"), out);
+  });
+
+  it("--resume tracks an independent cursor per provider", async () => {
+    // Add a *new* codex rollout file only — claude-code gets nothing new — then
+    // verify --resume correctly attributes the new invocation to codex alone,
+    // proving lastScanMtimeMs (claude-code) and lastScanMtimeMsByProvider.codex
+    // are read/written independently in the --all-providers loop.
+    const skillDir = join(home, ".codex", "skills", "github");
+    const skillPath = join(skillDir, "SKILL.md");
+    const codexSessDir = join(home, ".codex", "sessions", "2026", "01", "05");
+    await mkdir(codexSessDir, { recursive: true });
+    await writeFile(
+      join(codexSessDir, "rollout-2026-01-05T00-00-00-uuid2.jsonl"),
+      jsonl([
+        { type: "session_meta", payload: { id: "codex-sess2", cwd: "/repo" } },
+        {
+          type: "response_item",
+          timestamp: "2026-01-05T00:00:36.000Z",
+          payload: {
+            type: "function_call",
+            name: "exec_command",
+            call_id: "call_2",
+            arguments: JSON.stringify({ cmd: `sed -n '1,220p' ${skillPath}` }),
+          },
+        },
+      ])
+    );
+
+    const out = run(["scan", "--all-providers", "--resume"]);
+    // claude-code has no file newer than its cursor, so nothing is scanned at all
+    // (not just zero *new* events) — matches runScanOnce's "No invocations found" branch.
+    assert.ok(out.includes("claude-code: No invocations found."), out);
+    assert.ok(out.includes("codex: Imported 1 new invocations"), out);
+
+    const state = JSON.parse(await readFile(join(store, "state.json"), "utf-8"));
+    assert.ok(typeof state.lastScanMtimeMs === "number");
+    assert.ok(typeof state.lastScanMtimeMsByProvider?.codex === "number");
+    assert.ok(
+      state.lastScanMtimeMsByProvider.codex > oldCodexMtime.getTime(),
+      "codex cursor must advance past the pinned old rollout file's mtime"
+    );
   });
 });
