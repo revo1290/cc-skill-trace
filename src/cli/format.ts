@@ -162,6 +162,11 @@ export interface SkillStat {
   autoRate: number;
 }
 
+/**
+ * Aggregate skill invocation events into per-skill statistics.
+ * @param events - Array of invocation events to analyze
+ * @returns Array of skill stats sorted by invocation count (highest first)
+ */
 export function buildStats(events: SkillInvocationEvent[]): SkillStat[] {
   const map: Record<string, SkillStat> = {};
   for (const ev of events) {
@@ -194,6 +199,12 @@ export interface RenderStatsOptions {
   days?: number;
 }
 
+/**
+ * Render a formatted statistics dashboard showing daily activity, streaks, hour-of-day patterns, and top sessions/directories.
+ * @param events - Events to analyze for the statistics view
+ * @param opts - Rendering options (limit for top rows, days window for daily activity)
+ * @returns Formatted terminal string with ANSI styling
+ */
 export function renderStats(events: SkillInvocationEvent[], opts: RenderStatsOptions = {}): string {
   const topN = opts.limit ?? 5;
   const dayWindow = opts.days ?? 14;
@@ -319,6 +330,13 @@ export function renderStats(events: SkillInvocationEvent[], opts: RenderStatsOpt
 
 // ─── Cost estimate view (#49) ────────────────────────────────────────────────
 
+/**
+ * Render an injected-token cost estimate dashboard showing per-skill token usage and estimated USD cost.
+ * Only events with measured injectedTokens are included in the estimate.
+ * @param events - Events to analyze for cost estimation
+ * @param model - Model name to determine pricing ("sonnet", "opus", "haiku"; default "sonnet")
+ * @returns Formatted terminal string with ANSI styling
+ */
 export function renderCost(events: SkillInvocationEvent[], model = "sonnet"): string {
   const cost = estimateCost(events, model);
   const lines: string[] = [];
@@ -366,6 +384,14 @@ export function renderCost(events: SkillInvocationEvent[], model = "sonnet"): st
 
 // ─── Period diff view (#44) ──────────────────────────────────────────────────
 
+/**
+ * Render a period comparison dashboard showing skill usage differences between two date ranges.
+ * @param events - Events to analyze
+ * @param periodA - First comparison period (ISO strings for since/before)
+ * @param periodB - Second comparison period
+ * @param labels - Human-readable labels for the two periods (e.g. "this week" vs "last week")
+ * @returns Formatted terminal string with ANSI styling
+ */
 export function renderDiff(
   events: SkillInvocationEvent[],
   periodA: Period,
@@ -412,6 +438,12 @@ export function renderDiff(
 
 // ─── Diagnose view (#41) ─────────────────────────────────────────────────────
 
+/**
+ * Render an auto-trigger diagnosis dashboard showing skills that may be over-triggering.
+ * Flags skills with high/medium severity and provides suggestions for skill authors.
+ * @param events - Events to analyze for over-triggering patterns
+ * @returns Formatted terminal string with ANSI styling
+ */
 export function renderDiagnose(events: SkillInvocationEvent[]): string {
   const findings = analyzeAutoTriggers(events);
   const lines: string[] = [];
@@ -448,6 +480,12 @@ export function renderDiagnose(events: SkillInvocationEvent[]): string {
 
 // ─── Session-grouped view (#121) ─────────────────────────────────────────────
 
+/**
+ * Render a session-grouped view showing all invocations organized by session ID.
+ * Sessions are ordered by most recent activity first.
+ * @param events - Events to group by session
+ * @returns Formatted terminal string with ANSI styling
+ */
 export function renderGroupBySession(events: SkillInvocationEvent[]): string {
   const lines: string[] = [];
   lines.push(hr("═"));
@@ -497,6 +535,13 @@ export interface RenderDashboardOptions {
   perPage?: number;
 }
 
+/**
+ * Render the main skill invocation dashboard showing summary stats, skill breakdown, and recent invocations.
+ * Recent invocations are paginated (default 12 per page).
+ * @param events - Events to display in the dashboard
+ * @param opts - Pagination options (page number and items per page)
+ * @returns Formatted terminal string with ANSI styling and pagination info
+ */
 export function renderDashboard(
   events: SkillInvocationEvent[],
   opts: RenderDashboardOptions = {}
@@ -659,6 +704,12 @@ export type CompactColumn = (typeof COMPACT_COLUMNS)[number];
 
 const DEFAULT_COLUMNS: CompactColumn[] = ["time", "skill", "source", "trigger"];
 
+/**
+ * Render events as a compact columnar table (no ANSI styling for easy parsing/logging).
+ * @param events - Events to display
+ * @param columns - Which columns to include (default: time, skill, source, trigger)
+ * @returns Plain-text table with tab-separated columns
+ */
 export function renderCompact(
   events: SkillInvocationEvent[],
   columns: CompactColumn[] = DEFAULT_COLUMNS
@@ -714,6 +765,12 @@ export function renderCompact(
 // Used by SKILL.md to minimise context consumption when /skill-trace fires.
 // No ANSI, no padding — pure signal for the model.
 
+/**
+ * Render events in minimal AI-optimized format (no ANSI, minimal tokens) for use in SKILL.md /skill-trace.
+ * Output is compact one-liner summary followed by recent invocations in "HH:MM skill source [trigger]" format.
+ * @param events - Events to display
+ * @returns Plain-text terse summary optimized for model context consumption
+ */
 export function renderTerse(events: SkillInvocationEvent[]): string {
   if (events.length === 0) {
     return "0 events. Run: cc-skill-trace install then restart Claude Code.";
