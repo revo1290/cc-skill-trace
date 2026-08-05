@@ -4,3 +4,5 @@ src/
 tsconfig.json
 *.log
 .DS_Store
+docs/
+typedoc.json

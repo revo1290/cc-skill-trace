@@ -1,6 +1,7 @@
 node_modules/
 dist/
 skills/
+docs/api/
 .env
 .env.local
 *.log
