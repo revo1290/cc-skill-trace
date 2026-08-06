@@ -112,8 +112,8 @@ export function toSql(events: SkillInvocationEvent[]): string {
   return `${lines.join("\n")}\n`;
 }
 
-/** Refuse to silently clobber an existing file (#137). */
-async function guardOverwrite(path: string, force: boolean): Promise<void> {
+/** Refuse to silently clobber an existing file (#137). Also used by `merge` (#226). */
+export async function guardOverwrite(path: string, force: boolean): Promise<void> {
   try {
     await access(path);
   } catch {

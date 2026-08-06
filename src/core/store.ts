@@ -405,20 +405,113 @@ export function updateEvent(
 }
 
 /**
+ * Dedupe events by ID (first occurrence across `sources`, in order, wins) and
+ * sort the result by timestamp. Shared core of {@link mergeStores} (store
+ * directories) and {@link mergeEventSources} (arbitrary files, #226) so both
+ * stay consistent instead of reimplementing the same dedup rule twice.
+ */
+function dedupeAndSort(sources: SkillInvocationEvent[][]): {
+  events: SkillInvocationEvent[];
+  duplicates: number;
+} {
+  const seen = new Set<string>();
+  const events: SkillInvocationEvent[] = [];
+  let duplicates = 0;
+  for (const list of sources) {
+    for (const ev of list) {
+      if (seen.has(ev.id)) {
+        duplicates++;
+        continue;
+      }
+      seen.add(ev.id);
+      events.push(ev);
+    }
+  }
+  events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  return { events, duplicates };
+}
+
+/**
  * Merge events from multiple store directories, de-duplicated by event ID and
  * sorted by timestamp (#132). The first occurrence of an ID wins.
  */
 export async function mergeStores(dirs: string[]): Promise<SkillInvocationEvent[]> {
-  const seen = new Set<string>();
-  const merged: SkillInvocationEvent[] = [];
-  for (const dir of dirs) {
-    for (const ev of await readEvents({ dir })) {
-      if (seen.has(ev.id)) continue;
-      seen.add(ev.id);
-      merged.push(ev);
+  const sources: SkillInvocationEvent[][] = [];
+  for (const dir of dirs) sources.push(await readEvents({ dir }));
+  return dedupeAndSort(sources).events;
+}
+
+// ─── Cross-file merge for the `merge` CLI command (#226) ─────────────────────
+// mergeStores() above expects store *directories* (each containing
+// events.jsonl) — the shape used internally and by `export --merge`. The
+// `merge` command instead targets ad hoc files people hand around (a raw
+// events.jsonl copied off another machine, or an `export --format json`
+// array), so it gets its own reader that sniffs the file shape.
+
+/**
+ * Read events from a single `merge` source (#226): a store *directory*
+ * (containing events.jsonl, read the same way as {@link mergeStores}), a raw
+ * `events.jsonl`-style file (one JSON event per line), or a JSON array file
+ * as written by `export --format json`. Malformed lines/entries are skipped
+ * rather than aborting the whole source. Throws a plain `Error` with a
+ * user-facing message when `path` does not exist or cannot be read.
+ */
+export async function readEventSource(path: string): Promise<SkillInvocationEvent[]> {
+  let isDir: boolean;
+  try {
+    isDir = (await stat(path)).isDirectory();
+  } catch {
+    throw new Error(`Source not found or not readable: ${path}`);
+  }
+  if (isDir) return readEvents({ dir: path });
+
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf-8");
+  } catch (err) {
+    throw new Error(
+      `Could not read source ${path}: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  // JSON array, e.g. `export --format json` output.
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed.filter(isValidEvent);
+    } catch {
+      // Not actually a JSON array — fall through to line-delimited parsing.
     }
   }
-  return merged.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+  // JSONL: one JSON event per line (the raw events.jsonl format).
+  const events: SkillInvocationEvent[] = [];
+  for (const line of trimmed.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsedLine: unknown = JSON.parse(line);
+      if (isValidEvent(parsedLine)) events.push(parsedLine);
+    } catch {
+      // skip malformed lines without losing the rest of the source
+    }
+  }
+  return events;
+}
+
+/**
+ * Merge events from multiple arbitrary `merge` sources (#226): directories or
+ * export files, in any combination. Reuses the same dedup-by-ID +
+ * sort-by-timestamp rule as {@link mergeStores} via {@link dedupeAndSort}.
+ */
+export async function mergeEventSources(
+  paths: string[]
+): Promise<{ events: SkillInvocationEvent[]; duplicates: number }> {
+  const sources: SkillInvocationEvent[][] = [];
+  for (const path of paths) sources.push(await readEventSource(path));
+  return dedupeAndSort(sources);
 }
 
 // ─── Store integrity (#175) ──────────────────────────────────────────────────
