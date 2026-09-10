@@ -1,0 +1,37 @@
+name: Commit convention
+
+# Pull requests land as squash merges, so the PR title becomes the commit
+# subject on main — and that is what `scripts/generate-changelog.mjs` reads at
+# release time. Validating the title here is what keeps main's history
+# machine-readable (#114).
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commit-lint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    name: PR title follows Conventional Commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+
+      # The title is passed through the environment, never interpolated into
+      # the shell command — it is attacker-controlled text on a fork PR.
+      - name: Check the PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: node scripts/check-pr-title.mjs

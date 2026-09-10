@@ -116,6 +116,12 @@ Events recorded via real-time hooks (`hook-capture`) do not include `triggerMess
 
 However, running `cc-skill-trace scan` re-discovers the same invocation from the session log, and `store.ts`'s `enrichExistingEvents` (#223) backfills the missing `triggerMessage` **onto the existing hook-captured event in place** (never as a new, duplicate row). `source` is similarly upgraded to `"user"` when the hook side is `"claude"` (unknown/default) and scan finds stronger evidence (e.g. Codex's explicit `$SkillName` mention, or Claude Code's slash-command detection). Only values are ever added — an existing value is never overwritten or downgraded (`"user"` → `"claude"`). In short: `hook-capture` alone permanently lacks `triggerMessage`, but running `scan` afterward backfills it.
 
+### Commit convention and changelog (#114)
+
+Commits and PR titles follow Conventional Commits; PRs are squash-merged, so the PR title is what lands on `main`. `.github/workflows/commit-lint.yml` validates `github.event.pull_request.title` with `scripts/check-pr-title.mjs` (title passed via env, never interpolated into the shell — it is attacker-controlled on fork PRs).
+
+`scripts/generate-changelog.mjs` runs in `release.yml` after the version bump. It **promotes hand-written `## [Unreleased]` notes as-is** and only groups commit subjects when that section is empty — the changelog's hand-edited prose always wins over a generated commit dump. It also rewrites the link-reference block at the bottom of `CHANGELOG.md`. Both scripts are dependency-free `.mjs` (like `copy-skill.mjs`) so CI can run them without a build; their tests are `src/cli/conventional-commit.test.ts` and `src/cli/changelog.test.ts`.
+
 ### Where to add tests
 
 New core logic goes in the corresponding `*.test.ts` file (example: `core/filter.ts` → `core/filter.test.ts`). End-to-end CLI behavior (real subprocess spawning, sandboxed `HOME`/`CC_STORE_DIR`/`CC_PROJECTS_DIR`) is consolidated in `cli/integration.test.ts`.

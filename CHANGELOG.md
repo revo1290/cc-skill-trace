@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `report --watch` — serve the HTML report from a local `node:http` server (loopback-only) so the browser tab updates in place as new invocations land, the way `show --follow` keeps the terminal dashboard current. `--port` picks a fixed port (default: any free one) and `--interval` sets the browser poll interval (default 2000ms). Plain `report` is unchanged: still a standalone, dependency-free `file://` snapshot (#228)
 - Public API: `computeReportData`/`renderHtmlReport` (report aggregation split from HTML rendering), `startLiveReportServer`, and `eventsFilePath`
+- Conventional Commits are now enforced on pull-request titles (`.github/workflows/commit-lint.yml`), and the release workflow updates `CHANGELOG.md` automatically — hand-written `## [Unreleased]` notes are promoted as-is, commit subjects are only used when that section is empty (#114)
 
 ### Fixed
 - HTML report: when Chart.js could not be loaded (offline, or a blocked CDN), the `onerror` fallback ran while the page was still in `<head>` and threw instead of rendering its "charts unavailable" notice. The message now appears in place of the two canvases, and the heatmap, per-branch bars and event table — none of which need Chart.js — keep rendering
