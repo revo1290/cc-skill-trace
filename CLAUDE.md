@@ -50,7 +50,8 @@ src/
     ├── options.ts      # Shared filter option definitions (addFilterOptions etc.)
     ├── ui.ts           # Color control, confirmation prompts, browser launch, update check helpers
     ├── format.ts       # Terminal dashboard (box-drawing + chalk. renderDashboard is the core)
-    ├── web-report.ts   # Standalone HTML report generation (Chart.js loaded from CDN)
+    ├── web-report.ts   # Report data aggregation (computeReportData) + standalone HTML generation (Chart.js loaded from CDN)
+    ├── live-server.ts  # Local node:http server behind `report --watch` (#228)
     ├── atomic-write.ts # Atomic writes to settings.json (.tmp→rename, cleanup on failure)
     ├── hooks.ts        # Detect own hook entries in settings.json (command field exact match)
     ├── skill-md.ts     # Compare old/new SKILL.md (CRLF-agnostic)
@@ -75,7 +76,7 @@ src/
 4. `hook-capture` always returns `{}` (non-blocking). stdin read has timeout and size limits
 5. `cc-skill-trace show` → Read events.jsonl and display **terminal dashboard**
 6. `/skill-trace` (inside Claude Code) → Claude follows SKILL.md instructions and runs `cc-skill-trace show --scan --terse`, then explains the results
-7. `cc-skill-trace report` → Read events.jsonl, generate HTML, open in browser
+7. `cc-skill-trace report` → Read events.jsonl, generate HTML, open in browser. With `--watch`, serve it from a loopback `node:http` server instead: the page polls `/api/state` (a signature) and pulls `/api/data` only when it changed, re-rendering in place (#228)
 8. `cc-skill-trace scan` → Backfill by traversing `~/.claude/projects/**/*.jsonl`. Reconcile hook-originated events with `selectNewEvents` (session+skill+args+time window) to prevent double-registration. On a match, `enrichExistingEvents` backfills the existing event's `triggerMessage`/`source` via `updateEvent` (#223)
 
 ### Key design decisions
@@ -84,7 +85,8 @@ src/
 - `hook-capture` is implemented as a hidden subcommand in `src/cli/commands/capture.ts` (handle both Pre/Post in this one file)
 - `show` is the default command — running `cc-skill-trace` alone displays the dashboard
 - Terminal output uses box-drawing characters + ANSI colors for maximum readability (`format.ts:renderDashboard`). Auto-disabled on `NO_COLOR`/non-TTY
-- HTML report is a zero-dependency standalone file (Chart.js from CDN, heatmap/per-branch graphs use custom CSS)
+- HTML report is a zero-dependency standalone file (Chart.js from CDN, heatmap/per-branch graphs use custom CSS). `computeReportData` (aggregation) is deliberately split from `renderHtmlReport` (HTML shell) so `report --watch` can recompute the payload without regenerating the page
+- `report --watch` (#228) starts a `node:http` server — "zero dependencies" means zero *npm* dependencies, so built-in modules are fair game. It binds loopback, serves only `/`, `/api/state` and `/api/data`, and validates the `Host` header (`isAllowedHost`) to block DNS rebinding. Plain `report` stays a static `file://` snapshot and keeps `connect-src 'none'` in its CSP; only live mode relaxes that to `'self'`
 - Event store is JSONL. Schema version managed via `v` field (v1 implicit, v2 adds `recordedVia`/`tags`/`outcome`/`durationMs`, v3 adds `provider`. Missing `provider` always treated as `"claude-code"`)
 - `readEvents` uses streaming reads + per-line filtering. Does not load entire file into memory
 - Config split into `~/.cc-skill-trace/config.json` (user-editable) and `state.json` (internal state, last scan, etc.)

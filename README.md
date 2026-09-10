@@ -194,9 +194,37 @@ cc-skill-trace report -o ~/reports/skills.html --no-open
 cc-skill-trace report --theme light                # light | dark | auto (default)
 cc-skill-trace report --redact                     # mask trigger messages before embedding
 cc-skill-trace report --scan --since 2026-04-01
+cc-skill-trace report --watch                      # live-updating report (#228)
+cc-skill-trace report --watch --port 4000 --interval 1000
 ```
 
 The report includes a skill × hour-of-day heatmap, per-branch bar chart, filter/search state persisted in `localStorage`, keyboard-navigable event cards, and print/PDF-friendly styling.
+
+#### Live mode (`--watch`)
+
+`report` writes a static snapshot, so a new invocation only shows up after you
+re-run it. `--watch` is the browser-side counterpart to `show --follow`: it
+starts a tiny local server (Node's built-in `http` — still no npm
+dependencies) and the page refreshes its stats, charts and event table in
+place as events land.
+
+```bash
+cc-skill-trace report --watch                # ephemeral port, opens the browser
+cc-skill-trace report --watch --port 4000    # fixed port
+cc-skill-trace report --watch --interval 1000  # poll every second (default 2000ms)
+cc-skill-trace report --watch --no-open      # print the URL, don't launch a browser
+```
+
+- Plain `report` is unchanged — a standalone `file://` page you can email or
+  drop in a gist. `--watch` never writes a file, and can't be combined with
+  `--share`.
+- The server binds `127.0.0.1` only, serves exactly three routes (`/`,
+  `/api/state`, `/api/data`), and rejects requests whose `Host` header isn't
+  loopback, so a page on the public internet can't rebind DNS and read your
+  events.
+- Polling is cheap: `/api/state` returns just a signature, and the store file
+  is re-read only when its size or mtime changed.
+- Ctrl+C stops the server.
 
 ### Export
 

@@ -1,4 +1,4 @@
-import { access, writeFile } from "node:fs/promises";
+import { access, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -7,16 +7,19 @@ import type { Command } from "commander";
 import { parseDuration } from "../../core/filter.js";
 import {
   clearEvents,
+  eventsFilePath,
   mergeStores,
   pruneEvents,
   readEvents,
   updateEvent,
 } from "../../core/store.js";
+import type { ReadEventsOptions } from "../../core/store.js";
 import type { SkillInvocationEvent } from "../../core/types.js";
 import { getConfig } from "../context.js";
 import { addFilterOptions, filterFromOpts, parseLimitOpt } from "../options.js";
 import { applyFilter } from "../../core/filter.js";
-import { buildHtmlReport } from "../web-report.js";
+import { DEFAULT_LIVE_POLL_MS, startLiveReportServer } from "../live-server.js";
+import { type HtmlReportOptions, buildHtmlReport } from "../web-report.js";
 import { confirm, fail, openInBrowser } from "../ui.js";
 import { scanAndMerge } from "./scan.js";
 
@@ -125,6 +128,78 @@ export async function guardOverwrite(path: string, force: boolean): Promise<void
 
 // ─── Commands ────────────────────────────────────────────────────────────────
 
+/**
+ * `report --watch` (#228): serve the report from a local server that re-reads
+ * the store whenever it changes, so the browser tab stays current the way
+ * `show --follow` keeps the terminal dashboard current.
+ *
+ * The events file is only re-read when its size/mtime moved, and the page only
+ * re-fetches the payload when the served signature changed — an idle store
+ * costs one tiny request per poll interval.
+ */
+async function runLiveReport(
+  opts: Record<string, unknown>,
+  reportOpts: HtmlReportOptions,
+  readOpts: ReadEventsOptions
+): Promise<void> {
+  const storeFile = eventsFilePath();
+  const pollMs = opts.interval
+    ? Math.max(250, parseInt(String(opts.interval), 10) || DEFAULT_LIVE_POLL_MS)
+    : DEFAULT_LIVE_POLL_MS;
+  const port = opts.port ? parseInt(String(opts.port), 10) : 0;
+  if (opts.port && (!Number.isInteger(port) || port < 0 || port > 65535)) {
+    return fail(`Invalid --port "${opts.port}". Use a number between 0 and 65535.`);
+  }
+
+  let live: Awaited<ReturnType<typeof startLiveReportServer>>;
+  try {
+    live = await startLiveReportServer({
+      load: () => readEvents(readOpts),
+      // Size+mtime is enough: the store is append-only for captures, and the
+      // rewrite paths (prune/repair/enrich) always change one or the other.
+      revision: async () => {
+        try {
+          const st = await stat(storeFile);
+          return `${st.size}:${st.mtimeMs}`;
+        } catch {
+          return "missing"; // no store yet — the report just shows "no data"
+        }
+      },
+      report: reportOpts,
+      pollMs,
+      port,
+    });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EADDRINUSE") {
+      return fail(`Port ${port} is already in use. Pick another with --port, or omit it.`);
+    }
+    if (code === "EACCES") {
+      return fail(`Not allowed to bind port ${port}. Ports below 1024 usually need root.`);
+    }
+    return fail(err instanceof Error ? err.message : String(err));
+  }
+
+  console.log(chalk.green(`✓  Live report → ${live.url}`));
+  console.log(chalk.gray(`   Watching ${storeFile} — refreshes every ${pollMs}ms.`));
+  console.log(chalk.gray("   Ctrl+C to stop."));
+
+  if (opts.open !== false && !openInBrowser(live.url)) {
+    console.log(chalk.gray(`   Open manually: ${live.url}`));
+  }
+
+  await new Promise<void>((resolve) => {
+    const stop = () => {
+      void live.close().then(() => {
+        console.log(chalk.gray("\n  Live report stopped."));
+        resolve();
+      });
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+}
+
 export function registerExportCommands(program: Command): void {
   // ── export ─────────────────────────────────────────────────────────────
   const exp = program
@@ -183,6 +258,9 @@ export function registerExportCommands(program: Command): void {
     .option("--redact", "Mask trigger messages in the report (#108)")
     .option("--share", "After generating, upload as a secret GitHub Gist via gh CLI (#157)")
     .option("--scan", "Scan session logs first")
+    .option("--watch", "Serve a live-updating report from a local server (#228)")
+    .option("--port <n>", "Port for --watch (default: a free port)")
+    .option("--interval <ms>", "Browser poll interval for --watch in milliseconds (#228)")
     .action(async (opts) => {
       const filter = filterFromOpts(opts);
       const theme = String(opts.theme).toLowerCase();
@@ -197,15 +275,24 @@ export function registerExportCommands(program: Command): void {
         console.log(chalk.gray(`  Scanned: ${scanned.length} invocations (${fresh.length} new).`));
       }
       const config = await getConfig();
-      const events = await readEvents({
-        ...filter,
-        limit: opts.limit ? parseInt(String(opts.limit), 10) : undefined,
-      });
-
-      const html = buildHtmlReport(events, {
+      const reportOpts = {
         theme: theme as "dark" | "light" | "auto",
         redactTriggers: Boolean(opts.redact) || config.redactTriggerMessages,
-      });
+      };
+      const readOpts = {
+        ...filter,
+        limit: opts.limit ? parseInt(String(opts.limit), 10) : undefined,
+      };
+
+      if (opts.watch) {
+        if (opts.share) {
+          return fail("--share cannot be combined with --watch (there is no file to upload).");
+        }
+        return runLiveReport(opts, reportOpts, readOpts);
+      }
+
+      const events = await readEvents(readOpts);
+      const html = buildHtmlReport(events, reportOpts);
       await writeFile(opts.output, html, "utf-8");
       console.log(chalk.green(`✓  Report → ${opts.output}  (${events.length} events)`));
 

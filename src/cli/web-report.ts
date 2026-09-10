@@ -16,28 +16,78 @@ function safeJson(value: unknown): string {
   return JSON.stringify(value).replace(/<\//g, "<\\/");
 }
 
+/** Per-skill invocation counts behind the report's charts. */
+export interface ReportSkillCounts {
+  /** Total invocations of the skill. */
+  total: number;
+  /** Invocations explicitly requested by the user. */
+  byUser: number;
+  /** Invocations auto-triggered by the assistant. */
+  byClaude: number;
+}
+
+/** Live-update settings embedded into a report served by `report --watch` (#228). */
+export interface LiveReportSettings {
+  /** How often the page polls the server's `/api/state`, in milliseconds. */
+  pollMs: number;
+  /** Signature of the embedded payload, compared against `/api/state`. */
+  signature: string;
+}
+
 /** Options for {@link buildHtmlReport}. */
 export interface HtmlReportOptions {
   /** Initial color theme (#150). "auto" follows prefers-color-scheme. */
   theme?: "dark" | "light" | "auto";
   /** Mask trigger messages before embedding them (#108). */
   redactTriggers?: boolean;
+  /**
+   * When set, the page polls a local server for new events and re-renders in
+   * place instead of staying a static snapshot (#228). Set by `report --watch`;
+   * a report generated without it keeps working as a standalone `file://` page.
+   */
+  live?: LiveReportSettings;
 }
 
-/** Build a standalone HTML file that visualizes skill invocations */
-export function buildHtmlReport(
-  events: SkillInvocationEvent[],
-  opts: HtmlReportOptions = {}
-): string {
-  const theme = opts.theme ?? "auto";
+/**
+ * Everything the report page renders, in one serializable payload.
+ *
+ * `report --watch` serves this from `/api/data` so the browser can refresh the
+ * charts and the event table in place rather than reloading the whole page (#228).
+ */
+export interface ReportData {
+  /** Events, oldest first (already redacted when requested). */
+  events: SkillInvocationEvent[];
+  /** Top 20 skills by invocation count. */
+  topSkills: [string, ReportSkillCounts][];
+  /** Per-day invocation counts, ascending by day. */
+  byDay: { day: string; count: number }[];
+  /** Skill x hour-of-day heatmap for the top skills (#46). */
+  heatmap: { skills: string[]; rows: number[][] };
+  /** Top 10 git branches by invocation count (#101). */
+  branches: [string, number][];
+  /** Headline numbers shown in the stat cards. */
+  stats: { total: number; autoRate: number; uniqueSkills: number; activeDays: number };
+  /** ISO timestamp of when this payload was computed. */
+  generatedAt: string;
+}
 
-  // ── Privacy: redact trigger messages before anything is embedded (#108) ──
+/**
+ * Aggregate raw events into everything the report page needs.
+ *
+ * Kept separate from rendering so the live server can recompute the payload
+ * without re-generating the surrounding HTML shell (#228).
+ */
+export function computeReportData(
+  events: SkillInvocationEvent[],
+  opts: { redactTriggers?: boolean } = {}
+): ReportData {
+  // -- Privacy: redact trigger messages before anything is embedded (#108) --
   const sourceEvents: SkillInvocationEvent[] = opts.redactTriggers
     ? events.map((ev) => (ev.triggerMessage ? { ...ev, triggerMessage: "[redacted]" } : ev))
     : events;
 
-  // ── Aggregation ──────────────────────────────────────────────────────────
-  const skillCounts: Record<string, { total: number; byUser: number; byClaude: number }> = {};
+  // -- Aggregation -----------------------------------------------------------
+  const skillCounts: Record<string, ReportSkillCounts> = {};
   for (const ev of sourceEvents) {
     const counts = skillCounts[ev.skillName] ?? { total: 0, byUser: 0, byClaude: 0 };
     skillCounts[ev.skillName] = counts;
@@ -46,7 +96,7 @@ export function buildHtmlReport(
     else counts.byClaude++;
   }
 
-  const topSkills = Object.entries(skillCounts)
+  const topSkills: [string, ReportSkillCounts][] = Object.entries(skillCounts)
     .sort((a, b) => b[1].total - a[1].total)
     .slice(0, 20);
 
@@ -64,7 +114,7 @@ export function buildHtmlReport(
     byDay[day] = (byDay[day] ?? 0) + 1;
   }
 
-  // Skill × hour-of-day heatmap for the top skills (#46)
+  // Skill x hour-of-day heatmap for the top skills (#46)
   const heatSkills = topSkills.slice(0, 8).map(([name]) => name);
   const heatmap: Record<string, number[]> = {};
   for (const name of heatSkills) heatmap[name] = new Array<number>(24).fill(0);
@@ -81,32 +131,62 @@ export function buildHtmlReport(
     if (!ev.gitBranch) continue;
     byBranch[ev.gitBranch] = (byBranch[ev.gitBranch] ?? 0) + 1;
   }
-  const topBranches = Object.entries(byBranch)
+  const topBranches: [string, number][] = Object.entries(byBranch)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 10);
 
-  // ── JSON data embedded in the page ───────────────────────────────────────
-  const eventsJson = safeJson(sourceEvents);
-  const topSkillsJson = safeJson(topSkills);
-  const byDayJson = safeJson(
-    Object.entries(byDay)
+  return {
+    events: sourceEvents,
+    topSkills,
+    byDay: Object.entries(byDay)
       .sort()
-      .map(([day, count]) => ({ day, count }))
-  );
-  const heatmapJson = safeJson({ skills: heatSkills, rows: heatSkills.map((s) => heatmap[s]) });
-  const branchesJson = safeJson(topBranches);
+      .map(([day, count]) => ({ day, count })),
+    heatmap: { skills: heatSkills, rows: heatSkills.map((s) => heatmap[s] ?? []) },
+    branches: topBranches,
+    stats: {
+      total: sourceEvents.length,
+      autoRate,
+      uniqueSkills: Object.keys(skillCounts).length,
+      activeDays: Object.keys(byDay).length,
+    },
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+/** Build a standalone HTML file that visualizes skill invocations */
+export function buildHtmlReport(
+  events: SkillInvocationEvent[],
+  opts: HtmlReportOptions = {}
+): string {
+  return renderHtmlReport(computeReportData(events, opts), opts);
+}
+
+/**
+ * Render a pre-computed {@link ReportData} payload as an HTML page.
+ *
+ * `buildHtmlReport` is the usual entry point; the live server calls this
+ * directly with a payload it already holds (#228).
+ */
+export function renderHtmlReport(data: ReportData, opts: HtmlReportOptions = {}): string {
+  const theme = opts.theme ?? "auto";
+  const live = opts.live ?? null;
+  // The static report never talks to the network beyond the Chart.js CDN, so
+  // it keeps `connect-src 'none'`. Live mode needs to poll its own origin.
+  const connectSrc = live ? "'self'" : "'none'";
+  const dataJson = safeJson(data);
 
   return /* html */ `<!DOCTYPE html>
 <html lang="en" data-theme="${theme === "auto" ? "" : theme}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; connect-src 'none'; frame-src 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; connect-src ${connectSrc}; frame-src 'none'; object-src 'none';">
 <title>cc-skill-trace — Skill Invocation Report</title>
+<!-- Loaded synchronously: by the time the end-of-body script runs, Chart is
+     either defined or the load failed, and renderCharts() renders a fallback. -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"
   integrity="sha384-T/4KgSWuZEPozpPz7rnnp/5lDSnpY1VPJCojf1S81uTHS1E38qgLfMgVsAeRCWc4"
-  crossorigin="anonymous"
-  onerror="document.getElementById('charts-section').innerHTML='<p class=\\'cdn-error\\'>⚠ Charts unavailable — Chart.js could not be loaded (no internet connection?). The event table below is still fully functional.</p>'"></script>
+  crossorigin="anonymous"></script>
 <style>
   .cdn-error { color: var(--muted); font-size: 12px; padding: 24px 0; text-align: center; }
   :root {
@@ -136,6 +216,14 @@ export function buildHtmlReport(
   .header .badge { background: var(--accent); color: var(--bg); border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700; }
   .header .meta { margin-left: auto; color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 12px; }
   #themeToggle { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 4px 10px; cursor: pointer; font-family: inherit; font-size: 12px; }
+  /* Live-mode status pill (#228) */
+  #livePill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px; font-size: 11px; color: var(--muted); }
+  #livePill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  #livePill[data-state="live"] .dot { background: #3fb950; }
+  #livePill[data-state="updated"] { border-color: var(--accent); color: var(--accent); }
+  #livePill[data-state="updated"] .dot { background: var(--accent); }
+  #livePill[data-state="offline"] { border-color: var(--yellow); color: var(--yellow); }
+  #livePill[data-state="offline"] .dot { background: var(--yellow); }
   #themeToggle:focus-visible, .filter-btn:focus-visible, .event-card:focus-visible, #loadMoreBtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; padding: 24px 32px; }
   .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
@@ -193,26 +281,27 @@ export function buildHtmlReport(
   <h1>cc-skill-trace</h1>
   <span class="badge">Skill Invocation Report</span>
   <span class="meta">
-    <span>Generated: ${escapeHtml(new Date().toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }))}</span>
+    ${live ? '<span id="livePill" data-state="live" role="status" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="livePillText">live</span></span>' : ""}
+    <span id="generatedAt">Generated: ${escapeHtml(new Date(data.generatedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }))}</span>
     <button id="themeToggle" type="button" aria-label="Toggle color theme">◐ theme</button>
   </span>
 </div>
 
 <div class="stats" role="group" aria-label="Summary statistics">
   <div class="stat-card">
-    <div class="value">${sourceEvents.length}</div>
+    <div class="value" id="statTotal">${data.stats.total}</div>
     <div class="label">Total Invocations</div>
   </div>
   <div class="stat-card">
-    <div class="value" style="color:var(--claude)">${autoRate}%</div>
+    <div class="value" id="statAutoRate" style="color:var(--claude)">${data.stats.autoRate}%</div>
     <div class="label">Auto-triggered by Claude</div>
   </div>
   <div class="stat-card">
-    <div class="value" style="color:var(--yellow)">${Object.keys(skillCounts).length}</div>
+    <div class="value" id="statSkills" style="color:var(--yellow)">${data.stats.uniqueSkills}</div>
     <div class="label">Unique Skills Used</div>
   </div>
   <div class="stat-card">
-    <div class="value" style="color:var(--user)">${Object.keys(byDay).length}</div>
+    <div class="value" id="statDays" style="color:var(--user)">${data.stats.activeDays}</div>
     <div class="label">Active Days</div>
   </div>
 </div>
@@ -254,12 +343,16 @@ export function buildHtmlReport(
 </div>
 
 <script>
-const EVENTS = ${eventsJson};
-const TOP_SKILLS = ${topSkillsJson};
-const BY_DAY = ${byDayJson};
-const HEATMAP = ${heatmapJson};
-const BRANCHES = ${branchesJson};
+let DATA = ${dataJson};
 const INITIAL_THEME = ${safeJson(theme)};
+// null for a static report; { pollMs, signature } when served by "report --watch" (#228)
+const LIVE = ${live ? safeJson(live) : "null"};
+
+let EVENTS = DATA.events;
+let TOP_SKILLS = DATA.topSkills;
+let BY_DAY = DATA.byDay;
+let HEATMAP = DATA.heatmap;
+let BRANCHES = DATA.branches;
 
 // ── Theme handling (#150) — persisted in localStorage (#48) ──────────────
 const root = document.documentElement;
@@ -289,34 +382,69 @@ function escapeHtml(s) {
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────
-if (typeof Chart !== 'undefined') {
-  const skillCtx = document.getElementById('skillChart').getContext('2d');
-  new Chart(skillCtx, {
-    type: 'bar',
-    data: {
-      labels: TOP_SKILLS.map(([name]) => name),
-      datasets: [
-        { label: 'Claude', data: TOP_SKILLS.map(([,d]) => d.byClaude), backgroundColor: '#a78bfa80', borderColor: '#a78bfa', borderWidth: 1 },
-        { label: 'User',   data: TOP_SKILLS.map(([,d]) => d.byUser),   backgroundColor: '#38bdf880', borderColor: '#38bdf8', borderWidth: 1 },
-      ]
-    },
-    options: { responsive: true, plugins: { legend: { labels: { color: '#8b949e' } } }, scales: { x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d40' } }, y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d40' } } } }
-  });
+// Chart instances are kept around so live updates can mutate their data
+// instead of tearing down and rebuilding the canvases (#228).
+let skillChart = null;
+let timelineChart = null;
 
-  const tlCtx = document.getElementById('timelineChart').getContext('2d');
-  new Chart(tlCtx, {
-    type: 'line',
-    data: {
-      labels: BY_DAY.map(d => d.day),
-      datasets: [{ label: 'Invocations', data: BY_DAY.map(d => d.count), borderColor: '#f78166', backgroundColor: '#f7816620', fill: true, tension: 0.3 }]
-    },
-    options: { responsive: true, plugins: { legend: { labels: { color: '#8b949e' } } }, scales: { x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d40' } }, y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d40' } } } }
-  });
+function renderCharts() {
+  if (typeof Chart === 'undefined') {
+    // Offline, or the CDN is blocked. Replace only the two <canvas> elements:
+    // the heatmap and branch bars are hand-rolled CSS and keep working, so
+    // wiping the whole charts section would throw away working content.
+    document.querySelectorAll('#skillChart, #timelineChart').forEach(canvas => {
+      canvas.outerHTML = '<p class="cdn-error">⚠ Chart.js could not be loaded (no internet connection?). Everything below still works.</p>';
+    });
+    return;
+  }
+  const skillLabels = TOP_SKILLS.map(([name]) => name);
+  const claudeData = TOP_SKILLS.map(([,d]) => d.byClaude);
+  const userData = TOP_SKILLS.map(([,d]) => d.byUser);
+  const dayLabels = BY_DAY.map(d => d.day);
+  const dayData = BY_DAY.map(d => d.count);
+
+  if (skillChart) {
+    skillChart.data.labels = skillLabels;
+    skillChart.data.datasets[0].data = claudeData;
+    skillChart.data.datasets[1].data = userData;
+    skillChart.update();
+  } else {
+    const skillCtx = document.getElementById('skillChart').getContext('2d');
+    skillChart = new Chart(skillCtx, {
+      type: 'bar',
+      data: {
+        labels: skillLabels,
+        datasets: [
+          { label: 'Claude', data: claudeData, backgroundColor: '#a78bfa80', borderColor: '#a78bfa', borderWidth: 1 },
+          { label: 'User',   data: userData,   backgroundColor: '#38bdf880', borderColor: '#38bdf8', borderWidth: 1 },
+        ]
+      },
+      options: { responsive: true, plugins: { legend: { labels: { color: '#8b949e' } } }, scales: { x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d40' } }, y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d40' } } } }
+    });
+  }
+
+  if (timelineChart) {
+    timelineChart.data.labels = dayLabels;
+    timelineChart.data.datasets[0].data = dayData;
+    timelineChart.update();
+  } else {
+    const tlCtx = document.getElementById('timelineChart').getContext('2d');
+    timelineChart = new Chart(tlCtx, {
+      type: 'line',
+      data: {
+        labels: dayLabels,
+        datasets: [{ label: 'Invocations', data: dayData, borderColor: '#f78166', backgroundColor: '#f7816620', fill: true, tension: 0.3 }]
+      },
+      options: { responsive: true, plugins: { legend: { labels: { color: '#8b949e' } } }, scales: { x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d40' } }, y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d40' } } } }
+    });
+  }
 }
+renderCharts();
 
 // ── Skill × hour heatmap (#46) — pure CSS grid, no chart library ─────────
-(function renderHeatmap() {
+function renderHeatmap() {
   const el = document.getElementById('heatmap');
+  if (!el) return;
   if (!HEATMAP.skills.length) { el.innerHTML = '<p style="color:var(--muted);font-size:12px">No data.</p>'; return; }
   const max = Math.max(1, ...HEATMAP.rows.flat());
   let html = '<div class="heat-grid">';
@@ -332,11 +460,13 @@ if (typeof Chart !== 'undefined') {
   for (let h = 0; h < 24; h++) html += '<span>' + (h % 6 === 0 ? h : '') + '</span>';
   html += '</div>';
   el.innerHTML = html;
-})();
+}
+renderHeatmap();
 
 // ── Git-branch bars (#101) ────────────────────────────────────────────────
-(function renderBranches() {
+function renderBranches() {
   const el = document.getElementById('branches');
+  if (!el) return;
   if (!BRANCHES.length) { el.innerHTML = '<p style="color:var(--muted);font-size:12px">No branch data — events captured by the hook include the git branch automatically.</p>'; return; }
   const max = BRANCHES[0][1];
   el.innerHTML = BRANCHES.map(([name, count]) =>
@@ -344,7 +474,8 @@ if (typeof Chart !== 'undefined') {
     '<span class="bbar" style="width:' + Math.max(2, Math.round((count / max) * 60)) + '%"></span>' +
     '<span class="bcount">' + count + 'x</span></div>'
   ).join('');
-})();
+}
+renderBranches();
 
 // ── Event list with pagination and debounced search (#19) ────────────────
 const PAGE_SIZE = 100;
@@ -353,7 +484,7 @@ let currentSearch = '';
 let currentPage = 0;
 let filteredEvents = [];
 // Keyed by event ID so detail panels remain correct after filter changes
-const eventById = new Map(EVENTS.map(ev => [ev.id, ev]));
+let eventById = new Map(EVENTS.map(ev => [ev.id, ev]));
 
 // Restore persisted filter/search state (#48)
 try {
@@ -505,6 +636,83 @@ document.querySelectorAll('.filter-btn').forEach(b =>
   b.setAttribute('aria-pressed', String(b.dataset.filter === currentFilter)));
 
 renderList();
+
+// ── Stat cards ────────────────────────────────────────────────────────────
+function renderStats() {
+  document.getElementById('statTotal').textContent = DATA.stats.total;
+  document.getElementById('statAutoRate').textContent = DATA.stats.autoRate + '%';
+  document.getElementById('statSkills').textContent = DATA.stats.uniqueSkills;
+  document.getElementById('statDays').textContent = DATA.stats.activeDays;
+  document.getElementById('generatedAt').textContent = 'Generated: ' +
+    new Date(DATA.generatedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+// ── Live updates (#228) — only active when served by "report --watch" ────
+// The page polls a tiny /api/state endpoint (a signature string) and pulls the
+// full payload from /api/data only when that signature actually changed, so an
+// idle store costs one small request per interval.
+function applyData(next) {
+  DATA = next;
+  EVENTS = DATA.events;
+  TOP_SKILLS = DATA.topSkills;
+  BY_DAY = DATA.byDay;
+  HEATMAP = DATA.heatmap;
+  BRANCHES = DATA.branches;
+  eventById = new Map(EVENTS.map(ev => [ev.id, ev]));
+  renderStats();
+  renderCharts();
+  renderHeatmap();
+  renderBranches();
+  renderList();
+}
+
+if (LIVE) {
+  const pill = document.getElementById('livePill');
+  const pillText = document.getElementById('livePillText');
+  let signature = LIVE.signature;
+  let flashTimer;
+  let polling = false;
+
+  function setPill(state, text) {
+    if (!pill) return;
+    pill.dataset.state = state;
+    if (pillText) pillText.textContent = text;
+  }
+
+  function flashUpdated(count) {
+    setPill('updated', count + ' events');
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => setPill('live', 'live'), 2500);
+  }
+
+  async function poll() {
+    // Skip while a previous poll is still in flight, and while the tab is
+    // hidden — a background tab has nothing to redraw. Mirrors the overlap
+    // guard used by "show --follow" (#186).
+    if (polling || document.hidden) return;
+    polling = true;
+    try {
+      const state = await fetch('api/state', { cache: 'no-store' }).then(r => r.json());
+      if (state.signature !== signature) {
+        const payload = await fetch('api/data', { cache: 'no-store' }).then(r => r.json());
+        signature = payload.signature;
+        applyData(payload.data);
+        flashUpdated(payload.data.stats.total);
+      } else {
+        setPill('live', 'live');
+      }
+    } catch (err) {
+      // The CLI was stopped (Ctrl+C) or the machine went to sleep. Keep the
+      // last-rendered data on screen and say so, instead of blanking the page.
+      setPill('offline', 'disconnected');
+    } finally {
+      polling = false;
+    }
+  }
+
+  setInterval(poll, LIVE.pollMs);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+}
 </script>
 </body>
 </html>`;
