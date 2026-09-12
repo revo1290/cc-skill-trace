@@ -49,6 +49,47 @@ HOME=/tmp/cc-sandbox CC_STORE_DIR=/tmp/cc-sandbox/store CC_PROJECTS_DIR=/tmp/cc-
 3. Run `npm test` and `npm run typecheck` — both must pass.
 4. Open a pull request with a clear description of what changed and why.
 
+## Commit and pull-request titles
+
+This project follows [Conventional Commits](https://www.conventionalcommits.org).
+Pull requests are squash-merged, so **the PR title becomes the commit subject on
+`main`** — CI checks it, and the release workflow reads it when generating the
+changelog.
+
+```
+<type>(<optional scope>): <description>
+```
+
+```
+feat: add `report --watch` for a live-updating HTML report (#228)
+fix(scan): skip session files that disappear mid-scan
+docs: document the live report in the README
+chore(deps): bump commander from 12.1.0 to 15.0.0
+feat(store)!: drop the v1 event format        # "!" marks a breaking change
+```
+
+Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`,
+`chore`, `style`, `revert`. Keep the description lowercase, under 100
+characters in total, and without a trailing period.
+
+Check a title locally before pushing:
+
+```bash
+node scripts/check-pr-title.mjs "feat: add a thing"
+```
+
+### Changelog
+
+`CHANGELOG.md` is still written by hand — add your entry under
+`## [Unreleased]` when a change is user-facing. At release time the workflow
+promotes whatever is there to the new version heading, and only falls back to
+grouping commit subjects when the section was left empty:
+
+```bash
+node scripts/generate-changelog.mjs 3.1.0            # preview the generated section
+node scripts/generate-changelog.mjs 3.1.0 --write    # what CI does at release time
+```
+
 ## Code style
 
 - TypeScript strict mode is enforced (`"strict": true` in tsconfig).

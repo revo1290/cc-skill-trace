@@ -50,7 +50,8 @@ src/
     ├── options.ts      # Shared filter option definitions (addFilterOptions etc.)
     ├── ui.ts           # Color control, confirmation prompts, browser launch, update check helpers
     ├── format.ts       # Terminal dashboard (box-drawing + chalk. renderDashboard is the core)
-    ├── web-report.ts   # Standalone HTML report generation (Chart.js loaded from CDN)
+    ├── web-report.ts   # Report data aggregation (computeReportData) + standalone HTML generation (Chart.js loaded from CDN)
+    ├── live-server.ts  # Local node:http server behind `report --watch` (#228)
     ├── atomic-write.ts # Atomic writes to settings.json (.tmp→rename, cleanup on failure)
     ├── hooks.ts        # Detect own hook entries in settings.json (command field exact match)
     ├── skill-md.ts     # Compare old/new SKILL.md (CRLF-agnostic)
@@ -75,7 +76,7 @@ src/
 4. `hook-capture` always returns `{}` (non-blocking). stdin read has timeout and size limits
 5. `cc-skill-trace show` → Read events.jsonl and display **terminal dashboard**
 6. `/skill-trace` (inside Claude Code) → Claude follows SKILL.md instructions and runs `cc-skill-trace show --scan --terse`, then explains the results
-7. `cc-skill-trace report` → Read events.jsonl, generate HTML, open in browser
+7. `cc-skill-trace report` → Read events.jsonl, generate HTML, open in browser. With `--watch`, serve it from a loopback `node:http` server instead: the page polls `/api/state` (a signature) and pulls `/api/data` only when it changed, re-rendering in place (#228)
 8. `cc-skill-trace scan` → Backfill by traversing `~/.claude/projects/**/*.jsonl`. Reconcile hook-originated events with `selectNewEvents` (session+skill+args+time window) to prevent double-registration. On a match, `enrichExistingEvents` backfills the existing event's `triggerMessage`/`source` via `updateEvent` (#223)
 
 ### Key design decisions
@@ -84,7 +85,8 @@ src/
 - `hook-capture` is implemented as a hidden subcommand in `src/cli/commands/capture.ts` (handle both Pre/Post in this one file)
 - `show` is the default command — running `cc-skill-trace` alone displays the dashboard
 - Terminal output uses box-drawing characters + ANSI colors for maximum readability (`format.ts:renderDashboard`). Auto-disabled on `NO_COLOR`/non-TTY
-- HTML report is a zero-dependency standalone file (Chart.js from CDN, heatmap/per-branch graphs use custom CSS)
+- HTML report is a zero-dependency standalone file (Chart.js from CDN, heatmap/per-branch graphs use custom CSS). `computeReportData` (aggregation) is deliberately split from `renderHtmlReport` (HTML shell) so `report --watch` can recompute the payload without regenerating the page
+- `report --watch` (#228) starts a `node:http` server — "zero dependencies" means zero *npm* dependencies, so built-in modules are fair game. It binds loopback, serves only `/`, `/api/state` and `/api/data`, and validates the `Host` header (`isAllowedHost`) to block DNS rebinding. Plain `report` stays a static `file://` snapshot and keeps `connect-src 'none'` in its CSP; only live mode relaxes that to `'self'`
 - Event store is JSONL. Schema version managed via `v` field (v1 implicit, v2 adds `recordedVia`/`tags`/`outcome`/`durationMs`, v3 adds `provider`. Missing `provider` always treated as `"claude-code"`)
 - `readEvents` uses streaming reads + per-line filtering. Does not load entire file into memory
 - Config split into `~/.cc-skill-trace/config.json` (user-editable) and `state.json` (internal state, last scan, etc.)
@@ -113,6 +115,12 @@ src/
 Events recorded via real-time hooks (`hook-capture`) do not include `triggerMessage` at the time they're captured — the PreToolUse hook payload never includes the immediately preceding user message (a permanent limitation).
 
 However, running `cc-skill-trace scan` re-discovers the same invocation from the session log, and `store.ts`'s `enrichExistingEvents` (#223) backfills the missing `triggerMessage` **onto the existing hook-captured event in place** (never as a new, duplicate row). `source` is similarly upgraded to `"user"` when the hook side is `"claude"` (unknown/default) and scan finds stronger evidence (e.g. Codex's explicit `$SkillName` mention, or Claude Code's slash-command detection). Only values are ever added — an existing value is never overwritten or downgraded (`"user"` → `"claude"`). In short: `hook-capture` alone permanently lacks `triggerMessage`, but running `scan` afterward backfills it.
+
+### Commit convention and changelog (#114)
+
+Commits and PR titles follow Conventional Commits; PRs are squash-merged, so the PR title is what lands on `main`. `.github/workflows/commit-lint.yml` validates `github.event.pull_request.title` with `scripts/check-pr-title.mjs` (title passed via env, never interpolated into the shell — it is attacker-controlled on fork PRs).
+
+`scripts/generate-changelog.mjs` runs in `release.yml` after the version bump. It **promotes hand-written `## [Unreleased]` notes as-is** and only groups commit subjects when that section is empty — the changelog's hand-edited prose always wins over a generated commit dump. It also rewrites the link-reference block at the bottom of `CHANGELOG.md`. Both scripts are dependency-free `.mjs` (like `copy-skill.mjs`) so CI can run them without a build; their tests are `src/cli/conventional-commit.test.ts` and `src/cli/changelog.test.ts`.
 
 ### Where to add tests
 

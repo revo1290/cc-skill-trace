@@ -655,3 +655,119 @@ describe("merge command (#226)", () => {
     run(["merge", fixture, "--out", out, "--force"]); // --force skips the prompt
   });
 });
+
+describe("report --watch (#228)", () => {
+  // Spawns the real CLI, talks to the server it starts over HTTP, and checks
+  // that appending to the store is reflected without restarting anything.
+  let root: string;
+  let store: string;
+  let env: NodeJS.ProcessEnv;
+
+  before(async () => {
+    root = await mkdtemp(join(tmpdir(), "cc-skill-trace-watch-test-"));
+    const home = join(root, "home");
+    store = join(root, "store");
+    await mkdir(home, { recursive: true });
+    await mkdir(store, { recursive: true });
+    env = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      CC_STORE_DIR: store,
+      NO_COLOR: "1",
+    };
+  });
+
+  after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  function event(overrides: Record<string, unknown> = {}) {
+    return {
+      v: 3,
+      id: "w1",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      sessionId: "sess",
+      skillName: "pdf",
+      source: "claude",
+      ...overrides,
+    };
+  }
+
+  it("serves a live report that picks up newly appended events", async () => {
+    const eventsFile = join(store, "events.jsonl");
+    await writeFile(eventsFile, `${JSON.stringify(event())}\n`, "utf-8");
+
+    const child = spawn(
+      "node",
+      ["--import", "tsx/esm", CLI_ENTRY, "report", "--watch", "--no-open", "--interval", "250"],
+      { env, stdio: ["ignore", "pipe", "pipe"] }
+    );
+
+    try {
+      // The first stdout line carries the bound URL (the port is ephemeral).
+      const url = await new Promise<string>((resolve, reject) => {
+        let buf = "";
+        const timer = setTimeout(() => reject(new Error(`no URL in output: ${buf}`)), 20_000);
+        child.stdout.on("data", (chunk) => {
+          buf += String(chunk);
+          const match = /(http:\/\/127\.0\.0\.1:\d+\/)/.exec(buf);
+          if (match?.[1]) {
+            clearTimeout(timer);
+            resolve(match[1]);
+          }
+        });
+        child.on("exit", (code) => reject(new Error(`CLI exited early (${code}): ${buf}`)));
+      });
+
+      const page = await fetch(url).then((r) => r.text());
+      assert.ok(page.includes('id="livePill"'), "served page is not in live mode");
+
+      const before = await fetch(new URL("api/data", url)).then((r) => r.json());
+      assert.equal(before.data.stats.total, 1);
+
+      await writeFile(
+        eventsFile,
+        `${JSON.stringify(event())}\n${JSON.stringify(event({ id: "w2", skillName: "xlsx" }))}\n`,
+        "utf-8"
+      );
+
+      // Poll the same endpoint the browser polls until the store change lands.
+      const deadline = Date.now() + 15_000;
+      let after = before;
+      while (Date.now() < deadline && after.signature === before.signature) {
+        after = await fetch(new URL("api/data", url)).then((r) => r.json());
+      }
+      assert.notEqual(after.signature, before.signature, "signature never changed");
+      assert.equal(after.data.stats.total, 2);
+      assert.equal(after.data.stats.uniqueSkills, 2);
+    } finally {
+      child.kill("SIGINT");
+      await new Promise((resolve) => child.on("close", resolve));
+    }
+  });
+
+  it("rejects --watch combined with --share", () => {
+    assert.throws(
+      () =>
+        execFileSync("node", ["--import", "tsx/esm", CLI_ENTRY, "report", "--watch", "--share"], {
+          env,
+          encoding: "utf-8",
+          timeout: 15_000,
+        }),
+      /cannot be combined/
+    );
+  });
+
+  it("rejects an out-of-range --port", () => {
+    assert.throws(
+      () =>
+        execFileSync(
+          "node",
+          ["--import", "tsx/esm", CLI_ENTRY, "report", "--watch", "--port", "99999"],
+          { env, encoding: "utf-8", timeout: 15_000 }
+        ),
+      /Invalid --port/
+    );
+  });
+});

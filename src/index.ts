@@ -21,6 +21,7 @@ export {
   selectNewEvents,
   backupEvents,
   getStoreDir,
+  eventsFilePath,
   STORE_DIR,
   EVENTS_FILE,
 } from "./core/store.js";
@@ -74,5 +75,12 @@ export {
   vlen,
 } from "./cli/format.js";
 export type { SkillStat, RenderStatsOptions, RenderDashboardOptions } from "./cli/format.js";
-export { buildHtmlReport } from "./cli/web-report.js";
-export type { HtmlReportOptions } from "./cli/web-report.js";
+export { buildHtmlReport, computeReportData, renderHtmlReport } from "./cli/web-report.js";
+export type {
+  HtmlReportOptions,
+  LiveReportSettings,
+  ReportData,
+  ReportSkillCounts,
+} from "./cli/web-report.js";
+export { startLiveReportServer, isAllowedHost, DEFAULT_LIVE_POLL_MS } from "./cli/live-server.js";
+export type { LiveReportServer, LiveReportServerOptions } from "./cli/live-server.js";

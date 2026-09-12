@@ -76,12 +76,19 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # Promotes hand-written "## [Unreleased]" notes to the new version
+      # heading, and only falls back to grouping Conventional Commit subjects
+      # when that section was left empty (#114). Needs the full history that
+      # the checkout above fetches.
+      - name: Update CHANGELOG.md for this release
+        run: node scripts/generate-changelog.mjs "${{ inputs.version }}" --write
+
       - name: Push version bump as release branch, open PR, and enable auto-merge
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "release/v${{ inputs.version }}"
-          git add package.json package-lock.json
+          git add package.json package-lock.json CHANGELOG.md
           git commit -m "chore: release v${{ inputs.version }}"
           git push origin "release/v${{ inputs.version }}"
           gh pr create \

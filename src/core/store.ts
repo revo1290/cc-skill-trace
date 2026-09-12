@@ -22,6 +22,15 @@ function eventsPath(dir: string): string {
   return join(dir, EVENTS_FILE_NAME);
 }
 
+/**
+ * Absolute path of the event store's JSONL file, honoring `CC_STORE_DIR` /
+ * `--store`. Callers that need to watch the store for changes (e.g.
+ * `report --watch`) use this rather than re-deriving the file name (#228).
+ */
+export function eventsFilePath(dir = getStoreDir()): string {
+  return eventsPath(dir);
+}
+
 /** Create the store directory if it does not exist. */
 export async function ensureStoreDir(dir = getStoreDir()): Promise<void> {
   await mkdir(dir, { recursive: true });
