@@ -116,6 +116,19 @@ Events recorded via real-time hooks (`hook-capture`) do not include `triggerMess
 
 However, running `cc-skill-trace scan` re-discovers the same invocation from the session log, and `store.ts`'s `enrichExistingEvents` (#223) backfills the missing `triggerMessage` **onto the existing hook-captured event in place** (never as a new, duplicate row). `source` is similarly upgraded to `"user"` when the hook side is `"claude"` (unknown/default) and scan finds stronger evidence (e.g. Codex's explicit `$SkillName` mention, or Claude Code's slash-command detection). Only values are ever added — an existing value is never overwritten or downgraded (`"user"` → `"claude"`). In short: `hook-capture` alone permanently lacks `triggerMessage`, but running `scan` afterward backfills it.
 
+### Claude Code plugin distribution
+
+The repository root is also a Claude Code plugin marketplace: `.claude-plugin/marketplace.json` lists one plugin (`cc-skill-trace`, `source: "./"`) whose manifest `.claude-plugin/plugin.json` points `skills` at `./src/skill`, so the plugin reuses the same `src/skill/SKILL.md` that `install` copies (no duplicate copy to drift). Users run `/plugin marketplace add revo1290/cc-skill-trace` then `/plugin install cc-skill-trace@cc-skill-trace`; the skill appears as `/cc-skill-trace:skill-trace`.
+
+- The plugin ships **only the skill, never hooks**: `cc-skill-trace install` already registers PreToolUse/PostToolUse in `settings.json`, and plugin hooks on top would record every invocation twice. The CLI still has to be installed from npm
+- `version` is intentionally omitted so plugin users track `main` rather than a pinned, stale SKILL.md (`claude plugin validate .` warns about this; that warning is expected)
+- `src/cli/plugin-manifest.test.ts` guards these invariants in CI; run `claude plugin validate .` locally after editing either manifest
+
+### API docs and README screenshots
+
+- `npm run docs` writes Markdown (`docs/api/`, via `typedoc-plugin-markdown`). `npm run docs:site` (`typedoc --html docs/site`) writes the HTML site that `.github/workflows/docs.yml` deploys to GitHub Pages (https://revo1290.github.io/cc-skill-trace/). Don't switch the workflow back to `docs/api/`: an `actions/deploy-pages` deployment serves files as-is (no Jekyll), so a Markdown-only artifact has no `index.html`
+- README screenshots live in `docs/assets/` (excluded from npm by `.npmignore` and the `files` whitelist). Regenerate them with `npm run build && node scripts/capture-screenshots.mjs`, which renders a fabricated, seeded sample store with a sandboxed `HOME`/`CC_STORE_DIR` (never real data). It needs Playwright, which isn't a dependency of this package; pass `--chartjs <file>` when jsDelivr is unreachable
+
 ### Commit convention and changelog (#114)
 
 Commits and PR titles follow Conventional Commits; PRs are squash-merged, so the PR title is what lands on `main`. `.github/workflows/commit-lint.yml` validates `github.event.pull_request.title` with `scripts/check-pr-title.mjs` (title passed via env, never interpolated into the shell — it is attacker-controlled on fork PRs).
