@@ -2,6 +2,7 @@ node_modules/
 dist/
 skills/
 docs/api/
+docs/site/
 .env
 .env.local
 *.log

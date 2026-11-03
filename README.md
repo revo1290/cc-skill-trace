@@ -10,6 +10,13 @@ See which agent-CLI skills fired, when, and why — in your terminal or in an in
 [![npm downloads](https://img.shields.io/npm/dm/cc-skill-trace)](https://www.npmjs.com/package/cc-skill-trace)
 [![Node.js](https://img.shields.io/node/v/cc-skill-trace)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![API docs](https://img.shields.io/badge/API_docs-GitHub_Pages-blue)](https://revo1290.github.io/cc-skill-trace/)
+
+![Terminal dashboard rendered by cc-skill-trace show](docs/assets/dashboard.png)
+
+![Interactive HTML report rendered by cc-skill-trace report](docs/assets/report.png)
+
+<sub>Screenshots use fabricated sample data. Regenerate them with <code>node scripts/capture-screenshots.mjs</code> (see the script header).</sub>
 
 ---
 
@@ -101,9 +108,31 @@ cc-skill-trace uninstall --project # remove from project settings
 
 Uninstalling removes only cc-skill-trace's own hook entries — any other tool's hooks in the same `settings.json` are left untouched. Your captured events in `~/.cc-skill-trace/` are **not** deleted; run `cc-skill-trace clear --force` if you want to remove them too.
 
-### Use inside Claude Code (as a plugin)
+### Use inside Claude Code (`/skill-trace`)
 
 Type `/skill-trace` in the Claude Code chat to open the dashboard and have Claude explain why each skill was auto-triggered. Arguments after `/skill-trace` are passed through to `cc-skill-trace show`, e.g. `/skill-trace --since 7d` or `/skill-trace --skill commit`; with no arguments it shows the most recent 15 events.
+
+### Install the skill as a Claude Code plugin
+
+The `/skill-trace` skill is also published as a Claude Code plugin from this repository's own marketplace, so you can install (and later update) it from inside Claude Code:
+
+```
+/plugin marketplace add revo1290/cc-skill-trace
+/plugin install cc-skill-trace@cc-skill-trace
+```
+
+On Claude Code 2.1.275 or later this can be done in one step: `/plugin install cc-skill-trace --marketplace revo1290/cc-skill-trace`.
+
+Plugin skills are namespaced, so the plugin's copy runs as `/cc-skill-trace:skill-trace`. Updates follow this repository's `main` branch (`/plugin marketplace update cc-skill-trace`).
+
+The plugin ships **only the skill**. It doesn't register any hooks, because `cc-skill-trace install` already does, and registering them in both places would record every invocation twice. It also needs the CLI on your `PATH`, since the skill runs `cc-skill-trace show`. So you still need:
+
+```bash
+npm install -g cc-skill-trace
+cc-skill-trace install   # registers the capture hooks
+```
+
+`cc-skill-trace install` also copies the same skill to `~/.claude/skills/skill-trace/` (available as plain `/skill-trace`). Having both is harmless; use whichever name you prefer.
 
 ---
 
@@ -418,15 +447,14 @@ See [`schemas/skill-invocation-event.schema.json`](schemas/skill-invocation-even
 
 ## API Reference
 
-Full API docs (generated from `src/index.ts` and its re-exports with [TypeDoc](https://typedoc.org/)) can be generated locally:
+Full API docs, generated with [TypeDoc](https://typedoc.org/) from `src/index.ts` and its re-exports, are published to GitHub Pages at **<https://revo1290.github.io/cc-skill-trace/>**. They're rebuilt on every push to `main` by [`.github/workflows/docs.yml`](.github/workflows/docs.yml).
+
+To build them locally:
 
 ```bash
-npm run docs
+npm run docs        # Markdown pages → docs/api/ (entry point: docs/api/README.md)
+npm run docs:site   # HTML site (what GitHub Pages serves) → docs/site/ (entry point: docs/site/index.html)
 ```
-
-This writes Markdown pages to `docs/api/`. `docs/api/README.md` is the entry point.
-
-CI-driven publishing to GitHub Pages is set up (see [`.github/workflows/docs.yml`](.github/workflows/docs.yml)) but requires the repository owner to enable Pages once (Settings → Pages → Source: GitHub Actions) before the hosted docs go live — see the workflow file's header comment for details.
 
 ---
 

@@ -1,0 +1,15 @@
+{
+  "name": "cc-skill-trace",
+  "description": "Claude Code plugin marketplace for cc-skill-trace, the skill invocation debugger",
+  "owner": {
+    "name": "revo1290",
+    "url": "https://github.com/revo1290"
+  },
+  "plugins": [
+    {
+      "name": "cc-skill-trace",
+      "source": "./",
+      "description": "/skill-trace: see which skills fired in Claude Code, when, and why (auto vs user). Requires the cc-skill-trace CLI: npm install -g cc-skill-trace && cc-skill-trace install"
+    }
+  ]
+}

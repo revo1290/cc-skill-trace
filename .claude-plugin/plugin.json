@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "cc-skill-trace",
+  "displayName": "cc-skill-trace",
+  "description": "/skill-trace: see which skills fired in Claude Code, when, and why (auto vs user). Requires the cc-skill-trace CLI: npm install -g cc-skill-trace && cc-skill-trace install",
+  "author": {
+    "name": "revo1290",
+    "url": "https://github.com/revo1290"
+  },
+  "homepage": "https://github.com/revo1290/cc-skill-trace#readme",
+  "repository": "https://github.com/revo1290/cc-skill-trace",
+  "license": "MIT",
+  "keywords": ["skills", "debugging", "observability", "hooks", "tracing"],
+  "skills": ["./src/skill"]
+}
